@@ -1,0 +1,69 @@
+name: Build executables
+
+# Runs on every push to master, on any version tag (v1.0, etc.),
+# and can be triggered manually from the Actions tab.
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            artifact: dist/mssl_filter_inspector
+          - os: windows-latest
+            label: windows
+            artifact: dist/mssl_filter_inspector.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tkinter (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y python3-tk
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow numpy pyinstaller
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: >
+          pyinstaller
+          --onefile
+          --name mssl_filter_inspector
+          --hidden-import tkinter
+          --hidden-import tkinter.ttk
+          filter_inspector.py
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller
+          --onefile
+          --windowed
+          --name mssl_filter_inspector
+          --hidden-import tkinter
+          --hidden-import tkinter.ttk
+          filter_inspector.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mssl_filter_inspector_${{ matrix.label }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error

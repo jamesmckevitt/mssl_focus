@@ -1,12 +1,14 @@
-name: Build executables
+name: Build and release
 
-# Runs on every push to master, on any version tag (v1.0, etc.),
-# and can be triggered manually from the Actions tab.
+# Fires when you push a version tag  (e.g. git tag v1.2 && git push --tags).
+# Can also be triggered manually from the Actions tab for a test build.
 on:
   push:
-    branches: [master]
     tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create/update GitHub Releases
 
 jobs:
   build:
@@ -61,7 +63,17 @@ jobs:
           --hidden-import tkinter.ttk
           filter_inspector.py
 
-      - name: Upload artifact
+      # Tag push → create/update the GitHub Release and attach the binary
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
+          generate_release_notes: true
+
+      # Manual dispatch → save as a workflow artifact so you can still test builds
+      - name: Upload artifact (manual dispatch only)
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: mssl_filter_inspector_${{ matrix.label }}

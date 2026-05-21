@@ -160,7 +160,7 @@ class SessionMixin:
     def _new_session(self):
         answer = messagebox.askyesnocancel(
             "New session",
-            "Start a new session?\n\n"
+            "Save before starting a new session?\n\n"
             "Yes: choose where to save the current session first, then start a new blank session.\n"
             "No: start a new blank session now without saving.\n"
             "Cancel: keep working in the current session.",

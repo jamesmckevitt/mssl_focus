@@ -3,7 +3,7 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageTk
@@ -20,7 +20,119 @@ def _open_image(path):
         return Image.fromarray(rgb)
     return Image.open(path)
 
+
+def _denoise_gray_nlm(cv2, gray, amount, aggressive):
+    frac = max(0.0, min(1.0, float(amount) / 100.0))
+    h = frac * (34.0 if aggressive else 24.0)
+    search = 21 if aggressive else (17 if frac >= 0.6 else 13)
+    denoised = cv2.fastNlMeansDenoising(gray, None, h, 7, search)
+    if aggressive and frac >= 0.65:
+        second_h = max(6.0, h * 0.8)
+        denoised = cv2.fastNlMeansDenoising(denoised, None, second_h, 7, 21)
+    return denoised
+
+
+def _edge_blend_gray(cv2, original_gray, denoised_gray, edge_amount):
+    edge_frac = max(0.0, min(1.0, float(edge_amount) / 100.0))
+    original = original_gray.astype(np.float32)
+    denoised = denoised_gray.astype(np.float32)
+    gx = cv2.Sobel(original, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(original, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+    scale = float(np.percentile(mag, 95)) if mag.size else 0.0
+    edge_mask = np.clip(mag / max(scale, 1e-6), 0.0, 1.0)
+    denoise_weight = 1.0 - edge_mask * (1.0 - edge_frac)
+    blended = original * (1.0 - denoise_weight) + denoised * denoise_weight
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
+def _denoise_color_nlm(cv2, rgb, amount, color_amount, edge_amount, aggressive):
+    frac = max(0.0, min(1.0, float(amount) / 100.0))
+    color_frac = max(0.0, min(1.0, float(color_amount) / 100.0))
+    h = frac * (34.0 if aggressive else 24.0)
+    h_color = h * 1.6 * color_frac
+    search = 21 if aggressive else (17 if frac >= 0.6 else 13)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    denoised = cv2.fastNlMeansDenoisingColored(bgr, None, h, h_color, 7, search)
+    if aggressive and frac >= 0.65:
+        second_h = max(6.0, h * 0.8)
+        denoised = cv2.fastNlMeansDenoisingColored(
+            denoised, None, second_h, second_h * 1.6 * color_frac, 7, 21
+        )
+    denoised_rgb = cv2.cvtColor(denoised, cv2.COLOR_BGR2RGB)
+    original_ycc = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+    denoised_ycc = cv2.cvtColor(denoised_rgb, cv2.COLOR_RGB2YCrCb)
+    denoised_ycc[:, :, 0] = _edge_blend_gray(
+        cv2,
+        original_ycc[:, :, 0],
+        denoised_ycc[:, :, 0],
+        edge_amount,
+    )
+    return cv2.cvtColor(denoised_ycc, cv2.COLOR_YCrCb2RGB)
+
 class ViewerMixin:
+    def _show_noise_reduction_progress(self, idx, amount, color_amount, edge_amount, aggressive):
+        existing = getattr(self, "_nr_progress_dialog", None)
+        if existing is not None:
+            win = existing.get("window")
+            if win is not None and win.winfo_exists():
+                try:
+                    existing["bar"].stop()
+                    win.grab_release()
+                except Exception:
+                    pass
+                win.destroy()
+
+        win = tk.Toplevel(self.root)
+        win.title("Applying noise reduction")
+        win.configure(bg="#2b2b2b")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        tk.Label(
+            win,
+            text=(
+                f"Image {idx + 1}: applying {'aggressive ' if aggressive else ''}noise reduction\n"
+                f"NR {amount}  |  Color {color_amount}  |  Edge {edge_amount}"
+            ),
+            bg="#2b2b2b",
+            fg="#ddd",
+            justify=tk.LEFT,
+            font=("TkDefaultFont", 9),
+            padx=16,
+            pady=12,
+        ).pack(fill=tk.X)
+
+        bar = ttk.Progressbar(win, mode="indeterminate", length=320)
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(10)
+
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - win.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - win.winfo_height()) // 2)
+        win.geometry(f"+{x}+{y}")
+        win.grab_set()
+        self._nr_progress_dialog = {"window": win, "bar": bar}
+
+    def _close_noise_reduction_progress(self):
+        existing = getattr(self, "_nr_progress_dialog", None)
+        self._nr_progress_dialog = None
+        if existing is None:
+            return
+        win = existing.get("window")
+        if win is None or not win.winfo_exists():
+            return
+        try:
+            existing["bar"].stop()
+        except Exception:
+            pass
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        win.destroy()
+
     def load_image(self, idx):
         path = filedialog.askopenfilename(
             title=f"Open Image {idx + 1}",
@@ -58,6 +170,9 @@ class ViewerMixin:
             self.status_var.set(f"Image {idx + 1}: no image loaded")
             return
         amount = self.nr_amount_vars[idx].get()
+        color_amount = self.nr_color_vars[idx].get()
+        edge_amount = self.nr_edge_vars[idx].get()
+        aggressive = bool(self.nr_aggressive_vars[idx].get())
 
         if amount == 0:
             img = base.copy()
@@ -72,35 +187,49 @@ class ViewerMixin:
             return
 
         self.status_var.set(
-            f"Image {idx + 1}: applying NR (amount {amount}) -- please wait..."
+            f"Image {idx + 1}: applying {'aggressive ' if aggressive else ''}NR "
+            f"(amount {amount}, color {color_amount}, edge {edge_amount}) -- please wait..."
         )
         self.root.update_idletasks()
+        self._show_noise_reduction_progress(idx, amount, color_amount, edge_amount, aggressive)
 
         result_q = queue.SimpleQueue()
 
         def _worker():
             try:
                 import cv2
-                arr = np.array(base.convert("RGB"))
-                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                h = float(amount) / 5.0   # amount=50 -> h=10, matching Sony default
-                denoised = cv2.fastNlMeansDenoisingColored(
-                    bgr, None, h, h * 0.8, 7, 13
-                )
-                img = Image.fromarray(cv2.cvtColor(denoised, cv2.COLOR_BGR2RGB))
+                if base.mode == "L":
+                    gray = np.array(base.convert("L"))
+                    denoised = _denoise_gray_nlm(cv2, gray, amount, aggressive)
+                    denoised = _edge_blend_gray(cv2, gray, denoised, edge_amount)
+                    img = Image.fromarray(denoised)
+                else:
+                    rgb = np.array(base.convert("RGB"))
+                    denoised = _denoise_color_nlm(
+                        cv2, rgb, amount, color_amount, edge_amount, aggressive
+                    )
+                    img = Image.fromarray(denoised)
                 result_q.put(("ok", img))
             except ImportError:
                 # Fallback: YCbCr Gaussian blur
-                luma_r = amount / 100.0 * 3.0
-                chroma_r = amount / 100.0 * 8.0
+                edge_frac = max(0.0, min(1.0, float(edge_amount) / 100.0))
+                color_frac = max(0.0, min(1.0, float(color_amount) / 100.0))
+                luma_r = amount / 100.0 * (2.0 + edge_frac * (3.0 if aggressive else 2.0))
+                chroma_r = amount / 100.0 * ((3.0 if aggressive else 2.0) + color_frac * (9.0 if aggressive else 6.0))
                 try:
                     if base.mode == "L":
                         img = base.filter(ImageFilter.GaussianBlur(radius=luma_r))
+                        if aggressive and amount >= 65:
+                            img = img.filter(ImageFilter.GaussianBlur(radius=max(1.0, luma_r * 0.8)))
                     else:
                         y, cb, cr = base.convert("YCbCr").split()
                         y  = y.filter(ImageFilter.GaussianBlur(radius=luma_r))
                         cb = cb.filter(ImageFilter.GaussianBlur(radius=chroma_r))
                         cr = cr.filter(ImageFilter.GaussianBlur(radius=chroma_r))
+                        if aggressive and amount >= 65:
+                            y = y.filter(ImageFilter.GaussianBlur(radius=max(1.0, luma_r * 0.8)))
+                            cb = cb.filter(ImageFilter.GaussianBlur(radius=max(1.5, chroma_r * 0.8)))
+                            cr = cr.filter(ImageFilter.GaussianBlur(radius=max(1.5, chroma_r * 0.8)))
                         img = Image.merge("YCbCr", (y, cb, cr)).convert("RGB")
                     result_q.put(("ok", img))
                 except Exception as e:
@@ -114,6 +243,7 @@ class ViewerMixin:
             except queue.Empty:
                 self.root.after(50, _poll)
                 return
+            self._close_noise_reduction_progress()
             if status == "error":
                 self.status_var.set(f"Image {idx + 1}: NR failed -- {value}")
                 return
@@ -124,7 +254,10 @@ class ViewerMixin:
             self._last_rot[idx] = None
             self._rotated_preview_cache[idx] = None
             self._last_rot_preview[idx] = None
-            self.status_var.set(f"Image {idx + 1}: noise reduction applied (amount {amount})")
+            self.status_var.set(
+                f"Image {idx + 1}: {'aggressive ' if aggressive else ''}noise reduction applied "
+                f"(amount {amount}, color {color_amount}, edge {edge_amount})"
+            )
             self._schedule_render()
 
         threading.Thread(target=_worker, daemon=True).start()

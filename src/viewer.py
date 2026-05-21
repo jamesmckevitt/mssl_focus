@@ -14,7 +14,7 @@ def _open_image(path):
         import rawpy
         import numpy as np
         with rawpy.imread(path) as raw:
-            rgb = raw.postprocess()
+            rgb = raw.postprocess(use_camera_wb=True)
         return Image.fromarray(rgb)
     return Image.open(path)
 

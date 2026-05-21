@@ -148,6 +148,7 @@ class ViewerMixin:
         self.off_x_var.set("0")
         self.off_y_var.set("0")
         self.rot_var.set("0.0")
+        self.img2_scale_var.set("1.000")
         self.glob_rot_var.set("0.0")
         self._schedule_render()
 
@@ -214,10 +215,11 @@ class ViewerMixin:
             f"Image coords: ({img_x:.1f}, {img_y:.1f})  |  "
             f"Zoom: {self.zoom:.2f}x  |  "
             f"Offset: ({self.off_x_var.get()}, {self.off_y_var.get()})  |  "
-            f"Rotation: {self.rot_var.get()}deg"
+            f"Rotation: {self.rot_var.get()}deg  |  "
+            f"Scale: {self.img2_scale_var.get()}x"
         )
         self._draw_cursors()
-        if self.align_mode_var.get():
+        if self.align_mode_var.get() or self.align_scale_mode_var.get():
             if event.widget is self.canvas2:
                 self._align_guide_cursor = (event.x, event.y)
             else:
@@ -258,15 +260,17 @@ class ViewerMixin:
             off_y = int(float(self.off_y_var.get()))
             rot = float(self.rot_var.get())
             glob_rot = float(self.glob_rot_var.get())
+            img2_scale = self._get_img2_scale()
         except ValueError:
-            off_x, off_y, rot, glob_rot = 0, 0, 0.0, 0.0
+            off_x, off_y, rot, glob_rot, img2_scale = 0, 0, 0.0, 0.0, 1.0
 
         w1 = max(self.canvas1.winfo_width(), 1)
         h1 = max(self.canvas1.winfo_height(), 1)
 
         if mode == "overlay":
             v1 = self._get_view(self.images[0], 0, 0, glob_rot, w1, h1, idx=0)
-            v2 = self._get_view(self.images[1], off_x, off_y, glob_rot + rot, w1, h1, idx=1)
+            v2 = self._get_view(self.images[1], off_x, off_y, glob_rot + rot, w1, h1,
+                                idx=1, align_scale=img2_scale)
             alpha = self.opacity_var.get()
             if self.images[0] and self.images[1]:
                 blended = Image.blend(v1.convert("RGB"), v2.convert("RGB"), alpha)
@@ -287,7 +291,8 @@ class ViewerMixin:
             h2 = max(self.canvas2.winfo_height(), 1)
 
             v1 = self._get_view(self.images[0], 0, 0, glob_rot, w1, h1, idx=0)
-            v2 = self._get_view(self.images[1], off_x, off_y, glob_rot + rot, w2, h2, idx=1)
+            v2 = self._get_view(self.images[1], off_x, off_y, glob_rot + rot, w2, h2,
+                                idx=1, align_scale=img2_scale)
 
             self.photos[0] = ImageTk.PhotoImage(v1)
             self.photos[1] = ImageTk.PhotoImage(v2)
@@ -312,7 +317,7 @@ class ViewerMixin:
         self._draw_align_pts()
         self._draw_cursors()
 
-    def _get_view(self, img, off_x, off_y, rotation, canvas_w, canvas_h, idx=None):
+    def _get_view(self, img, off_x, off_y, rotation, canvas_w, canvas_h, idx=None, align_scale=1.0):
         placeholder = Image.new("RGB", (canvas_w, canvas_h), (30, 30, 30))
         if img is None:
             return placeholder
@@ -341,13 +346,16 @@ class ViewerMixin:
         zoom = max(self.zoom / source_scale, 1e-6)
         off_x = off_x * source_scale
         off_y = off_y * source_scale
-        paste_x = self.pan_x + off_x * zoom
-        paste_y = self.pan_y + off_y * zoom
+        cx = working.width / 2.0
+        cy = working.height / 2.0
+        scaled_zoom = zoom * align_scale
+        paste_x = self.pan_x + off_x * zoom + (1.0 - align_scale) * cx * zoom
+        paste_y = self.pan_y + off_y * zoom + (1.0 - align_scale) * cy * zoom
 
-        src_x0_f = max(0.0, (0.0 - paste_x) / zoom)
-        src_y0_f = max(0.0, (0.0 - paste_y) / zoom)
-        src_x1_f = min(float(working.width), (canvas_w - paste_x) / zoom)
-        src_y1_f = min(float(working.height), (canvas_h - paste_y) / zoom)
+        src_x0_f = max(0.0, (0.0 - paste_x) / scaled_zoom)
+        src_y0_f = max(0.0, (0.0 - paste_y) / scaled_zoom)
+        src_x1_f = min(float(working.width), (canvas_w - paste_x) / scaled_zoom)
+        src_y1_f = min(float(working.height), (canvas_h - paste_y) / scaled_zoom)
 
         if src_x1_f <= src_x0_f or src_y1_f <= src_y0_f:
             return placeholder
@@ -367,10 +375,10 @@ class ViewerMixin:
 
         region = working.crop((src_x0, src_y0, src_x1, src_y1))
 
-        dst_x0 = int(round(paste_x + src_x0_f * zoom))
-        dst_y0 = int(round(paste_y + src_y0_f * zoom))
-        dst_x1 = int(round(paste_x + src_x1_f * zoom))
-        dst_y1 = int(round(paste_y + src_y1_f * zoom))
+        dst_x0 = int(round(paste_x + src_x0_f * scaled_zoom))
+        dst_y0 = int(round(paste_y + src_y0_f * scaled_zoom))
+        dst_x1 = int(round(paste_x + src_x1_f * scaled_zoom))
+        dst_y1 = int(round(paste_y + src_y1_f * scaled_zoom))
 
         dst_x0 = max(0, min(canvas_w, dst_x0))
         dst_y0 = max(0, min(canvas_h, dst_y0))
@@ -421,6 +429,12 @@ class ViewerMixin:
         except ValueError:
             return 0, 0, 0.0, 0.0
 
+    def _get_img2_scale(self):
+        try:
+            return max(0.1, float(self.img2_scale_var.get()))
+        except ValueError:
+            return 1.0
+
     def _rotate_display_point(self, x, y, cx, cy, rot_deg):
         if not rot_deg:
             return x, y
@@ -465,7 +479,10 @@ class ViewerMixin:
             cx2, cy2 = self.images[1].width / 2.0, self.images[1].height / 2.0
         else:
             cx2 = cy2 = 0.0
+        scale = self._get_img2_scale()
         rx, ry = self._rotate_display_point(img_x, img_y, cx2, cy2, total_rot)
+        rx = cx2 + (rx - cx2) * scale
+        ry = cy2 + (ry - cy2) * scale
         return (
             self.pan_x + off_x * self.zoom + rx * self.zoom,
             self.pan_y + off_y * self.zoom + ry * self.zoom,
@@ -482,8 +499,11 @@ class ViewerMixin:
     def _canvas_to_img2(self, canvas_x, canvas_y):
         off_x, off_y, rot, glob_rot = self._get_alignment_values()
         total_rot = glob_rot + rot
+        scale = self._get_img2_scale()
         rx = (canvas_x - self.pan_x) / self.zoom - off_x
         ry = (canvas_y - self.pan_y) / self.zoom - off_y
         cx2 = self.images[1].width / 2.0 if self.images[1] else 0.0
         cy2 = self.images[1].height / 2.0 if self.images[1] else 0.0
+        rx = cx2 + (rx - cx2) / scale
+        ry = cy2 + (ry - cy2) / scale
         return self._unrotate_display_point(rx, ry, cx2, cy2, total_rot)

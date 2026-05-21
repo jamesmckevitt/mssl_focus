@@ -9,6 +9,15 @@ from .constants import _PRESET_COLOURS
 
 
 class AnnotationMixin:
+    def _annotation_canvas_position(self, ann, canvas_is_2=False, glob_rot=None):
+        if glob_rot is None:
+            _, _, _, glob_rot = self._get_alignment_values()
+        img1_x = float(ann["img1_x"])
+        img1_y = float(ann["img1_y"])
+        # Annotations are stored only in Image 1 reference space.
+        # Image 2 rendering is the current projection of that reference point.
+        return self._img1_to_canvas1(img1_x, img1_y, glob_rot)
+
     def _draw_align_guide(self):
         self.canvas2.delete("align_guide")
         if not self.align_mode_var.get():
@@ -452,17 +461,12 @@ class AnnotationMixin:
     def _find_annotation_at_event(self, event):
         if not self.annotations:
             return None
-        off_x, off_y, rot, glob_rot = self._get_alignment_values()
-        total_rot = glob_rot + rot
+        _, _, _, glob_rot = self._get_alignment_values()
         canvas_is_2 = (event.widget == self.canvas2)
         tolerance = 30
         closest, min_dist = None, float("inf")
         for i, ann in enumerate(self.annotations):
-            if canvas_is_2 and self.images[1] is not None:
-                cx, cy = self._img2_to_canvas2(ann["img2_x"], ann["img2_y"],
-                                               off_x, off_y, total_rot)
-            else:
-                cx, cy = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
+            cx, cy = self._annotation_canvas_position(ann, canvas_is_2=canvas_is_2, glob_rot=glob_rot)
             d = math.hypot(event.x - cx, event.y - cy)
             if d < tolerance and d < min_dist:
                 min_dist, closest = d, i
@@ -482,12 +486,9 @@ class AnnotationMixin:
         if idx is None:
             return
         img1_x, img1_y = self._canvas_to_img1(event.x, event.y)
-        img2_x, img2_y = self._canvas_to_img2(event.x, event.y)
         ann = self.annotations[idx]
         ann["img1_x"] = img1_x
         ann["img1_y"] = img1_y
-        ann["img2_x"] = img2_x
-        ann["img2_y"] = img2_y
         self.status_var.set(f"Move ann  -  dragging annotation {idx + 1}")
         self._schedule_render()
 
@@ -495,7 +496,6 @@ class AnnotationMixin:
         if self.images[0] is None and self.images[1] is None:
             return
         img1_x, img1_y = self._canvas_to_img1(event.x, event.y)
-        img2_x, img2_y = self._canvas_to_img2(event.x, event.y)
         label = ""
         if self.annot_label_var.get():
             label = simpledialog.askstring("Label", "Annotation label (leave blank for none):",
@@ -512,8 +512,6 @@ class AnnotationMixin:
         self.annotations.append({
             "img1_x": img1_x,
             "img1_y": img1_y,
-            "img2_x": img2_x,
-            "img2_y": img2_y,
             "radius": self.annot_radius_var.get(),
             "colour": colour,
             "label": label,
@@ -667,8 +665,7 @@ class AnnotationMixin:
         self._schedule_render()
 
     def _draw_annotations(self):
-        off_x, off_y, rot, glob_rot = self._get_alignment_values()
-        total_rot = glob_rot + rot
+        _, _, _, glob_rot = self._get_alignment_values()
         mode = self.mode_var.get()
         self.canvas1.delete("annotations")
         self.canvas2.delete("annotations")
@@ -677,13 +674,11 @@ class AnnotationMixin:
             self.canvas2.delete("legend")
             return
         for ann in self.annotations:
-            ix1, iy1 = ann["img1_x"], ann["img1_y"]
-            ix2, iy2 = ann["img2_x"], ann["img2_y"]
             colour = ann["colour"]
             label = ann.get("label", "")
             r = max(3, ann["radius"] * self.zoom)
 
-            cx, cy = self._img1_to_canvas1(ix1, iy1, glob_rot)
+            cx, cy = self._annotation_canvas_position(ann, canvas_is_2=False, glob_rot=glob_rot)
             self.canvas1.create_oval(cx - r, cy - r, cx + r, cy + r,
                                      outline=colour, width=self.annot_width_var.get(), tags="annotations")
             if label:
@@ -692,7 +687,7 @@ class AnnotationMixin:
                                          font=("TkDefaultFont", self.annot_label_size_var.get(), "bold"))
 
             if mode == "sidebyside" and self.images[1] is not None:
-                cx2, cy2 = self._img2_to_canvas2(ix2, iy2, off_x, off_y, total_rot)
+                cx2, cy2 = self._annotation_canvas_position(ann, canvas_is_2=True, glob_rot=glob_rot)
                 self.canvas2.create_oval(cx2 - r, cy2 - r, cx2 + r, cy2 + r,
                                          outline=colour, width=self.annot_width_var.get(), tags="annotations")
                 if label:

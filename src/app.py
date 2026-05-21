@@ -55,12 +55,16 @@ class ImageComparer(CropMixin, SessionMixin, AnnotationMixin, ViewerMixin, UIBui
         self._crop_corner1 = None
         self._annotation_import = None
         self._drag_annotation_index = None
+        self._nr_progress_dialog = None
 
         self.annot_label_size_var = tk.IntVar(value=16)
         self.canvas_legend_size_var = tk.IntVar(value=13)
 
         self._base_images = [None, None]
         self.nr_amount_vars = [tk.IntVar(value=0), tk.IntVar(value=0)]
+        self.nr_aggressive_vars = [tk.BooleanVar(value=False), tk.BooleanVar(value=False)]
+        self.nr_color_vars = [tk.IntVar(value=50), tk.IntVar(value=50)]
+        self.nr_edge_vars = [tk.IntVar(value=100), tk.IntVar(value=100)]
 
         self.adj_vars = [
             {

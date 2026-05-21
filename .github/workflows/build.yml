@@ -1,7 +1,6 @@
 name: Build and release
 
-# Fires when you push a version tag  (e.g. git tag v1.2 && git push --tags).
-# Can also be triggered manually from the Actions tab for a test build.
+# Fires on new version tags.
 on:
   push:
     tags: ["v*"]
@@ -42,6 +41,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install pillow numpy pyinstaller
 
+      - name: Prepare build files (icon, version info, _version.txt)
+        run: python build_prepare.py "${{ github.ref_name }}"
+
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: >
@@ -50,6 +52,8 @@ jobs:
           --name mssl_filter_inspector
           --hidden-import tkinter
           --hidden-import tkinter.ttk
+          --add-data "_version.txt:."
+          --icon app.ico
           filter_inspector.py
 
       - name: Build (Windows)
@@ -61,6 +65,9 @@ jobs:
           --name mssl_filter_inspector
           --hidden-import tkinter
           --hidden-import tkinter.ttk
+          --add-data "_version.txt:."
+          --icon app.ico
+          --version-file file_version_info.txt
           filter_inspector.py
 
       # Tag push -> create/update the GitHub Release and attach the binary
@@ -71,7 +78,7 @@ jobs:
           files: ${{ matrix.artifact }}
           generate_release_notes: true
 
-      # Manual dispatch -> save as a workflow artifact so you can still test builds
+      # Manual dispatch -> save as a workflow artifact so can still test builds
       - name: Upload artifact (manual dispatch only)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4

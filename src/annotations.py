@@ -1,4 +1,6 @@
 import math
+import os
+import sys
 import tkinter as tk
 from tkinter import colorchooser, messagebox, simpledialog
 
@@ -600,29 +602,37 @@ class AnnotationMixin:
 
     def _set_app_icon(self):
         try:
-            # Mesh grid icon
+            base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
+            ico_path = os.path.join(base_dir, "app.ico")
+            png_path = os.path.join(base_dir, "app.png")
+
+            if os.path.exists(ico_path):
+                try:
+                    self.root.iconbitmap(default=ico_path)
+                except Exception:
+                    pass
+
+            if os.path.exists(png_path):
+                try:
+                    photo = ImageTk.PhotoImage(Image.open(png_path))
+                    self.root.iconphoto(True, photo)
+                    self._icon_photo = photo
+                    return
+                except Exception:
+                    pass
+
             sz = 64
-            m = 4           # outer margin
-            g = 6           # grid inset from background edge
-            n = 5           # cells per side
-            img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+            m = 5
+            img = Image.new("RGBA", (sz, sz), (255, 255, 255, 255))
             d = ImageDraw.Draw(img)
-            d.rectangle([m, m, sz - m - 1, sz - m - 1],
-                         fill="#1a3a5c", outline="#6ab0dc", width=1)
-            g0 = m + g
-            g1 = sz - m - g - 1
-            for i in range(n + 1):
-                t = i / n
-                x = round(g0 + t * (g1 - g0))
-                y = round(g0 + t * (g1 - g0))
-                d.line([(x, g0), (x, g1)], fill="#4a9eff", width=1)
-                d.line([(g0, y), (g1, y)], fill="#4a9eff", width=1)
-            dr = 2
-            for i in range(n + 1):
-                for j in range(n + 1):
-                    cx = round(g0 + (i / n) * (g1 - g0))
-                    cy = round(g0 + (j / n) * (g1 - g0))
-                    d.ellipse([cx - dr, cy - dr, cx + dr, cy + dr], fill="#b0deff")
+            x0, y0 = m, m
+            x1, y1 = sz - m - 1, sz - m - 1
+            d.rectangle([x0, y0, x1, y1], fill="white", outline="black", width=2)
+            for frac in (1 / 3, 2 / 3):
+                x = round(x0 + frac * (x1 - x0))
+                y = round(y0 + frac * (y1 - y0))
+                d.line([(x, y0), (x, y1)], fill="black", width=2)
+                d.line([(x0, y), (x1, y)], fill="black", width=2)
             photo = ImageTk.PhotoImage(img)
             self.root.iconphoto(True, photo)
             self._icon_photo = photo

@@ -108,6 +108,7 @@ class CropMixin:
     def _render_crop_pil(self, x0, y0, x1, y1, label_size=12, legend_size=None, ann_width=None):
         off_x, off_y, rot, glob_rot = self._get_alignment_values()
         total_rot = glob_rot + rot
+        img2_scale = self._get_img2_scale()
         mode = self.mode_var.get()
         was_interacting = self._interacting
         self._interacting = False
@@ -127,7 +128,7 @@ class CropMixin:
 
         v1 = self._get_view(self.images[0], 0, 0, glob_rot, out_w, out_h, idx=0).convert("RGB")
         v2 = self._get_view(self.images[1], off_x, off_y,
-                            total_rot, out_w, out_h, idx=1).convert("RGB")
+                            total_rot, out_w, out_h, idx=1, align_scale=img2_scale).convert("RGB")
 
         zoom_inv = 1.0 / current_zoom if current_zoom > 0 else 1.0
         pil_label_size = max(1, round(label_size * zoom_inv))

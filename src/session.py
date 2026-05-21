@@ -85,7 +85,9 @@ class SessionMixin:
                     filetypes=[
                         ("Image files",
                          "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
-                         "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP"),
+                         "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
+                         "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
+                         "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
                         ("All files", "*.*"),
                     ]
                 )

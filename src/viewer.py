@@ -1,22 +1,41 @@
 import math
+import os
 import tkinter as tk
 from tkinter import filedialog
 
 from PIL import Image, ImageTk
 
+_RAW_EXTENSIONS = {'.arw', '.nef', '.cr2', '.cr3', '.orf', '.rw2', '.dng', '.raf', '.pef', '.srw'}
+
+
+def _open_image(path):
+    """Open a standard or camera RAW image and return a PIL Image."""
+    if os.path.splitext(path)[1].lower() in _RAW_EXTENSIONS:
+        import rawpy
+        import numpy as np
+        with rawpy.imread(path) as raw:
+            rgb = raw.postprocess()
+        return Image.fromarray(rgb)
+    return Image.open(path)
 
 class ViewerMixin:
     def load_image(self, idx):
         path = filedialog.askopenfilename(
             title=f"Open Image {idx + 1}",
             filetypes=[
-                ("Image files", "*.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP *.webp *.WEBP"),
+                ("Image files",
+                 "*.tif *.tiff *.TIF *.TIFF "
+                 "*.png *.PNG "
+                 "*.jpg *.JPG *.jpeg *.JPEG "
+                 "*.bmp *.BMP *.webp *.WEBP "
+                 "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
+                 "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
                 ("All files", "*.*"),
             ],
         )
         if not path:
             return
-        img = Image.open(path)
+        img = _open_image(path)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         self.images[idx] = img

@@ -174,8 +174,7 @@ class CropMixin:
                     drw.text((cx1 + r + 5, cy1 - pil_label_size // 2),
                              ann["label"], fill=ann["colour"], font=label_font)
                 if self.images[1] is not None:
-                    cx2, cy2 = self._img2_to_canvas2(ann["img2_x"], ann["img2_y"],
-                                                     off_x, off_y, total_rot)
+                    cx2, cy2 = self._annotation_canvas_position(ann, canvas_is_2=True, glob_rot=glob_rot)
                     drw.ellipse([out_w + gap + cx2 - r, cy2 - r,
                                  out_w + gap + cx2 + r, cy2 + r],
                                 outline=ann["colour"], width=ann_width)

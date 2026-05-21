@@ -57,6 +57,9 @@ class ImageComparer(CropMixin, SessionMixin, AnnotationMixin, ViewerMixin, UIBui
         self.annot_label_size_var = tk.IntVar(value=16)
         self.canvas_legend_size_var = tk.IntVar(value=13)
 
+        self._base_images = [None, None]
+        self.nr_amount_vars = [tk.IntVar(value=0), tk.IntVar(value=0)]
+
         self.adj_vars = [
             {
                 "brightness": tk.DoubleVar(value=1.0),

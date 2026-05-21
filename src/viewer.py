@@ -1,9 +1,12 @@
 import math
 import os
+import queue
+import threading
 import tkinter as tk
 from tkinter import filedialog
 
-from PIL import Image, ImageTk
+import numpy as np
+from PIL import Image, ImageFilter, ImageTk
 
 _RAW_EXTENSIONS = {'.arw', '.nef', '.cr2', '.cr3', '.orf', '.rw2', '.dng', '.raf', '.pef', '.srw'}
 
@@ -12,7 +15,6 @@ def _open_image(path):
     """Open a standard or camera RAW image and return a PIL Image."""
     if os.path.splitext(path)[1].lower() in _RAW_EXTENSIONS:
         import rawpy
-        import numpy as np
         with rawpy.imread(path) as raw:
             rgb = raw.postprocess(use_camera_wb=True)
         return Image.fromarray(rgb)
@@ -39,6 +41,7 @@ class ViewerMixin:
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         self.images[idx] = img
+        self._base_images[idx] = img
         self.image_paths[idx] = path
         self.preview_images[idx], self.preview_scales[idx] = self._make_preview(img)
         self._rotated_cache[idx] = None
@@ -47,6 +50,85 @@ class ViewerMixin:
         self._last_rot_preview[idx] = None
         self.status_var.set(f"Image {idx + 1} loaded: {path}  ({img.width}x{img.height})")
         self._schedule_render()
+
+    def _apply_noise_reduction(self, idx):
+        """Apply NLM noise reduction (OpenCV, CIELAB space) in a background thread."""
+        base = self._base_images[idx]
+        if base is None:
+            self.status_var.set(f"Image {idx + 1}: no image loaded")
+            return
+        amount = self.nr_amount_vars[idx].get()
+
+        if amount == 0:
+            img = base.copy()
+            self.images[idx] = img
+            self.preview_images[idx], self.preview_scales[idx] = self._make_preview(img)
+            self._rotated_cache[idx] = None
+            self._last_rot[idx] = None
+            self._rotated_preview_cache[idx] = None
+            self._last_rot_preview[idx] = None
+            self.status_var.set(f"Image {idx + 1}: noise reduction cleared")
+            self._schedule_render()
+            return
+
+        self.status_var.set(
+            f"Image {idx + 1}: applying NR (amount {amount}) -- please wait..."
+        )
+        self.root.update_idletasks()
+
+        result_q = queue.SimpleQueue()
+
+        def _worker():
+            try:
+                import cv2
+                arr = np.array(base.convert("RGB"))
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                h = float(amount) / 5.0   # amount=50 -> h=10, matching Sony default
+                denoised = cv2.fastNlMeansDenoisingColored(
+                    bgr, None, h, h * 0.8, 7, 13
+                )
+                img = Image.fromarray(cv2.cvtColor(denoised, cv2.COLOR_BGR2RGB))
+                result_q.put(("ok", img))
+            except ImportError:
+                # Fallback: YCbCr Gaussian blur
+                luma_r = amount / 100.0 * 3.0
+                chroma_r = amount / 100.0 * 8.0
+                try:
+                    if base.mode == "L":
+                        img = base.filter(ImageFilter.GaussianBlur(radius=luma_r))
+                    else:
+                        y, cb, cr = base.convert("YCbCr").split()
+                        y  = y.filter(ImageFilter.GaussianBlur(radius=luma_r))
+                        cb = cb.filter(ImageFilter.GaussianBlur(radius=chroma_r))
+                        cr = cr.filter(ImageFilter.GaussianBlur(radius=chroma_r))
+                        img = Image.merge("YCbCr", (y, cb, cr)).convert("RGB")
+                    result_q.put(("ok", img))
+                except Exception as e:
+                    result_q.put(("error", str(e)))
+            except Exception as e:
+                result_q.put(("error", str(e)))
+
+        def _poll():
+            try:
+                status, value = result_q.get_nowait()
+            except queue.Empty:
+                self.root.after(50, _poll)
+                return
+            if status == "error":
+                self.status_var.set(f"Image {idx + 1}: NR failed -- {value}")
+                return
+            img = value
+            self.images[idx] = img
+            self.preview_images[idx], self.preview_scales[idx] = self._make_preview(img)
+            self._rotated_cache[idx] = None
+            self._last_rot[idx] = None
+            self._rotated_preview_cache[idx] = None
+            self._last_rot_preview[idx] = None
+            self.status_var.set(f"Image {idx + 1}: noise reduction applied (amount {amount})")
+            self._schedule_render()
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self.root.after(50, _poll)
 
     def _on_mode_change(self):
         if self.mode_var.get() == "overlay":

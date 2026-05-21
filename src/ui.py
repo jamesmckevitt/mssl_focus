@@ -190,6 +190,18 @@ class UIBuilderMixin:
                       bg="#444", fg="white", relief=tk.FLAT, padx=5, pady=2,
                       cursor="hand2").pack(side=tk.LEFT, padx=(6, 2))
 
+            tk.Frame(toolbar5, bg="#444", width=1, height=20).pack(side=tk.LEFT, padx=(6, 0), fill=tk.Y)
+            tk.Label(toolbar5, text="NR:", bg="#12121a", fg="#aaa",
+                     font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(4, 0))
+            tk.Scale(toolbar5, variable=self.nr_amount_vars[img_idx],
+                     from_=0, to=100, resolution=1, orient=tk.HORIZONTAL, length=80,
+                     bg="#12121a", fg="#ccc", troughcolor="#444",
+                     highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=2)
+            tk.Button(toolbar5, text="Apply",
+                      command=lambda i=img_idx: self._apply_noise_reduction(i),
+                      bg="#334455", fg="#aaccff", relief=tk.FLAT, padx=5, pady=2,
+                      cursor="hand2").pack(side=tk.LEFT, padx=2)
+
         tk.Button(toolbar5, text="Reset all", command=self._reset_adjustments,
                   bg="#555", fg="white", relief=tk.FLAT, padx=6, pady=2,
                   cursor="hand2").pack(side=tk.RIGHT, padx=8)

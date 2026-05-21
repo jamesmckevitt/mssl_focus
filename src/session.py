@@ -10,6 +10,17 @@ from .viewer import _open_image
 
 
 class SessionMixin:
+    def _normalize_annotation_record(self, ann):
+        normalized = dict(ann)
+        normalized.pop("img2_x", None)
+        normalized.pop("img2_y", None)
+        normalized["img1_x"] = float(ann.get("img1_x", ann.get("img2_x", 0.0)))
+        normalized["img1_y"] = float(ann.get("img1_y", ann.get("img2_y", 0.0)))
+        normalized["radius"] = float(ann.get("radius", 20.0))
+        normalized["colour"] = ann.get("colour", "#ff0000")
+        normalized["label"] = ann.get("label", "")
+        return normalized
+
     def _fit_similarity_transform(self, source_points, target_points):
         src = np.array(source_points, dtype=float)
         dst = np.array(target_points, dtype=float)
@@ -56,7 +67,7 @@ class SessionMixin:
                 "img2_scale": self.img2_scale_var.get(),
                 "glob_rot": self.glob_rot_var.get(),
             },
-            "annotations": self.annotations,
+            "annotations": [self._normalize_annotation_record(ann) for ann in self.annotations],
             "colour_labels": self.colour_labels,
             "align_pts_img1": self._align_pts_img1,
             "align_pts_img2": self._align_pts_img2,
@@ -190,7 +201,7 @@ class SessionMixin:
         if "pan_y" in session:
             self.pan_y = float(session["pan_y"])
         if "annotations" in session:
-            self.annotations = session["annotations"]
+            self.annotations = [self._normalize_annotation_record(ann) for ann in session["annotations"]]
         if "colour_labels" in session:
             self.colour_labels = session["colour_labels"]
         if "align_pts_img1" in session:
@@ -251,7 +262,7 @@ class SessionMixin:
         viewer.zoom = float(session.get("zoom", 1.0))
         viewer.pan_x = float(session.get("pan_x", 0.0))
         viewer.pan_y = float(session.get("pan_y", 0.0))
-        viewer.annotations = [dict(ann) for ann in session.get("annotations", [])]
+        viewer.annotations = [self._normalize_annotation_record(ann) for ann in session.get("annotations", [])]
         viewer.colour_labels = dict(session.get("colour_labels", {}))
         viewer._align_pts_img1 = [tuple(p) for p in session.get("align_pts_img1", [])]
         viewer._align_pts_img2 = [tuple(p) for p in session.get("align_pts_img2", [])]
@@ -550,8 +561,7 @@ class SessionMixin:
         viewer = state.get("source_viewer")
         if viewer is None:
             return
-        off_x, off_y, rot, glob_rot = viewer._get_alignment_values()
-        total_rot = glob_rot + rot
+        _, _, _, glob_rot = viewer._get_alignment_values()
         pending = state["pending"]
         for image_idx, canvas in enumerate((viewer.canvas1, viewer.canvas2)):
             canvas.delete("import_selection")
@@ -559,16 +569,11 @@ class SessionMixin:
                 continue
             matched = set(state["matched_ann_indices"][0])
             for ann_index, ann in enumerate(state["source_annotations"]):
-                if image_idx == 0:
-                    cx, cy = viewer._img1_to_canvas1(float(ann["img1_x"]), float(ann["img1_y"]), glob_rot)
-                else:
-                    cx, cy = viewer._img2_to_canvas2(
-                        float(ann["img2_x"]),
-                        float(ann["img2_y"]),
-                        off_x,
-                        off_y,
-                        total_rot,
-                    )
+                cx, cy = viewer._annotation_canvas_position(
+                    ann,
+                    canvas_is_2=bool(image_idx),
+                    glob_rot=glob_rot,
+                )
                 radius = max(8, float(ann.get("radius", 20)) * viewer.zoom + 4)
                 if ann_index in matched:
                     canvas.create_oval(
@@ -678,22 +683,16 @@ class SessionMixin:
         viewer = state.get("source_viewer")
         if viewer is None:
             return
-        off_x, off_y, rot, glob_rot = viewer._get_alignment_values()
-        total_rot = glob_rot + rot
+        _, _, _, glob_rot = viewer._get_alignment_values()
 
         closest = None
         min_dist = float("inf")
         for ann_index, ann in enumerate(state["source_annotations"]):
-            if image_idx == 0:
-                cx, cy = viewer._img1_to_canvas1(float(ann["img1_x"]), float(ann["img1_y"]), glob_rot)
-            else:
-                cx, cy = viewer._img2_to_canvas2(
-                    float(ann["img2_x"]),
-                    float(ann["img2_y"]),
-                    off_x,
-                    off_y,
-                    total_rot,
-                )
+            cx, cy = viewer._annotation_canvas_position(
+                ann,
+                canvas_is_2=bool(image_idx),
+                glob_rot=glob_rot,
+            )
             dist = math.hypot(event.x - cx, event.y - cy)
             if dist < min_dist:
                 min_dist = dist
@@ -796,13 +795,10 @@ class SessionMixin:
         imported = []
         radius_scale = float(scale)
         for ann in state["source_annotations"]:
-            ann_copy = dict(ann)
+            ann_copy = self._normalize_annotation_record(ann)
             p1 = transform((ann_copy["img1_x"], ann_copy["img1_y"]))
-            p2 = transform((ann_copy["img2_x"], ann_copy["img2_y"]))
             ann_copy["img1_x"] = float(p1[0])
             ann_copy["img1_y"] = float(p1[1])
-            ann_copy["img2_x"] = float(p2[0])
-            ann_copy["img2_y"] = float(p2[1])
             ann_copy["radius"] = max(2.0, float(ann_copy.get("radius", 20.0)) * radius_scale)
             imported.append(ann_copy)
 

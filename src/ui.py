@@ -212,11 +212,11 @@ class UIBuilderMixin:
 
         tk.Frame(toolbar6, bg="#666", width=2, height=20).pack(side=tk.LEFT, padx=12, fill=tk.Y)
 
-        tk.Button(toolbar6, text="\U0001f4be Save session", command=self._save_session,
+        tk.Button(toolbar6, text="Save session", command=self._save_session,
                   bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=8, pady=2,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
 
-        tk.Button(toolbar6, text="\U0001f4c2 Load session", command=self._load_session,
+        tk.Button(toolbar6, text="Load session", command=self._load_session,
                   bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=8, pady=2,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
 

@@ -162,6 +162,13 @@ class UIBuilderMixin:
                  orient=tk.HORIZONTAL, length=100, bg="#1e1e2e", fg="#ccc",
                  troughcolor="#444", highlightthickness=0, sliderlength=10,
                  command=lambda _: self._schedule_render()).pack(side=tk.LEFT, padx=1)
+        tk.Label(toolbar4, text="Ann. width:", bg="#1e1e2e", fg="#ccc",
+                 font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(6, 1))
+        self.annot_width_var = tk.DoubleVar(value=2.0)
+        tk.Scale(toolbar4, variable=self.annot_width_var, from_=0.5, to=3.5,
+                 resolution=0.5, orient=tk.HORIZONTAL, length=80, bg="#1e1e2e", fg="#ccc",
+                 troughcolor="#444", highlightthickness=0, sliderlength=10,
+                 command=lambda _: self._schedule_render()).pack(side=tk.LEFT, padx=1)
 
         toolbar5 = tk.Frame(self.root, bg="#12121a", pady=4)
         toolbar5.pack(side=tk.TOP, fill=tk.X)

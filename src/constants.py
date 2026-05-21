@@ -1,3 +1,7 @@
+# Stroke width (pixels) for annotation circles drawn on the canvas and in exports.
+# Change this one value to adjust thickness everywhere.
+ANNOTATION_WIDTH = 3
+
 _PRESET_COLOURS = [
     "#ff0000", "#ff6600", "#ffcc00", "#ffff00",
     "#00cc44", "#00cccc", "#0088ff", "#0000ff",

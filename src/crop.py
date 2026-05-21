@@ -4,6 +4,7 @@ from tkinter import filedialog
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+from .constants import ANNOTATION_WIDTH
 from .metadata import APP_VERSION
 
 
@@ -133,7 +134,7 @@ class CropMixin:
         pil_label_size = max(1, round(label_size * zoom_inv))
         leg_size = legend_size if legend_size is not None else self.canvas_legend_size_var.get()
         pil_legend_size = max(1, round(leg_size * zoom_inv))
-        ann_width = max(1, round(3 * zoom_inv))
+        ann_width = max(1, round(ANNOTATION_WIDTH * zoom_inv))
 
         try:
             label_font = ImageFont.load_default(size=pil_label_size)

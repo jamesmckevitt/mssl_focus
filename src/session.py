@@ -107,10 +107,63 @@ class SessionMixin:
         self._schedule_render()
         self.status_var.set("New session started. Load two images to begin.")
 
+    def _apply_adjustments_from_session(self, session):
+        for i, d in enumerate(session.get("adjustments", [{}, {}])[:2]):
+            for key in ("brightness", "contrast", "blacks", "whites"):
+                if key in d:
+                    self.adj_vars[i][key].set(float(d[key]))
+
+    def _load_noise_reduction_settings_from_session(self, target, session):
+        defaults = [
+            {"amount": 0, "aggressive": False, "color": 50, "edge": 100},
+            {"amount": 0, "aggressive": False, "color": 50, "edge": 100},
+        ]
+        saved = session.get("noise_reduction", defaults)
+        for idx in range(2):
+            cfg = saved[idx] if idx < len(saved) else defaults[idx]
+            target.nr_amount_vars[idx].set(int(cfg.get("amount", defaults[idx]["amount"])))
+            target.nr_aggressive_vars[idx].set(bool(cfg.get("aggressive", defaults[idx]["aggressive"])))
+            target.nr_color_vars[idx].set(int(cfg.get("color", defaults[idx]["color"])))
+            target.nr_edge_vars[idx].set(int(cfg.get("edge", defaults[idx]["edge"])))
+
+    def _apply_saved_noise_reduction_from_session(self, target, session, on_complete=None):
+        self._load_noise_reduction_settings_from_session(target, session)
+        indices = []
+        for idx in range(2):
+            if target.images[idx] is not None and target.nr_amount_vars[idx].get() > 0:
+                indices.append(idx)
+
+        if not indices:
+            if on_complete is not None:
+                on_complete(False)
+            return
+
+        state = {"all_succeeded": True}
+
+        def apply_next(pos=0):
+            if pos >= len(indices):
+                if on_complete is not None:
+                    on_complete(state["all_succeeded"])
+                return
+
+            idx = indices[pos]
+
+            def step_done(success):
+                if not success:
+                    state["all_succeeded"] = False
+                apply_next(pos + 1)
+
+            target._apply_noise_reduction(idx, on_complete=step_done)
+
+        target.root.after(0, apply_next)
+
     def _new_session(self):
         answer = messagebox.askyesnocancel(
             "New session",
-            "Start a new session?\n\nSave the current session first if you want to keep these images, annotations, alignments, and adjustments.",
+            "Start a new session?\n\n"
+            "Yes: choose where to save the current session first, then start a new blank session.\n"
+            "No: start a new blank session now without saving.\n"
+            "Cancel: keep working in the current session.",
             parent=self.root,
         )
         if answer is None:
@@ -120,6 +173,36 @@ class SessionMixin:
             if not saved_path:
                 return
         self._reset_session_state()
+
+    def _import_image_settings_from_session(self):
+        path = filedialog.askopenfilename(
+            title="Import image settings from session",
+            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                session = json.load(f)
+        except Exception as exc:
+            messagebox.showerror(
+                "Import image settings",
+                f"Could not read session file:\n{exc}",
+                parent=self.root,
+            )
+            return
+
+        if "adjustments" not in session:
+            messagebox.showinfo(
+                "Import image settings",
+                "That session does not contain saved image adjustment settings.",
+                parent=self.root,
+            )
+            return
+
+        self._apply_adjustments_from_session(session)
+        self._schedule_render()
+        self.status_var.set(f"Imported image settings from {path}.")
 
     def _fit_similarity_transform(self, source_points, target_points):
         src = np.array(source_points, dtype=float)
@@ -173,6 +256,15 @@ class SessionMixin:
             "align_pts_img2": self._align_pts_img2,
             "adjustments": [
                 {k: v.get() for k, v in d.items()} for d in self.adj_vars
+            ],
+            "noise_reduction": [
+                {
+                    "amount": self.nr_amount_vars[i].get(),
+                    "aggressive": bool(self.nr_aggressive_vars[i].get()),
+                    "color": self.nr_color_vars[i].get(),
+                    "edge": self.nr_edge_vars[i].get(),
+                }
+                for i in range(2)
             ],
         }
         path = filedialog.asksaveasfilename(
@@ -309,13 +401,16 @@ class SessionMixin:
             self._align_pts_img1 = [tuple(p) for p in session["align_pts_img1"]]
         if "align_pts_img2" in session:
             self._align_pts_img2 = [tuple(p) for p in session["align_pts_img2"]]
-        for i, d in enumerate(session.get("adjustments", [{}, {}])[:2]):
-            for key in ("brightness", "contrast", "blacks", "whites"):
-                if key in d:
-                    self.adj_vars[i][key].set(float(d[key]))
+        self._apply_adjustments_from_session(session)
 
-        self._schedule_render()
-        self.status_var.set(f"Session loaded from {path}")
+        def finish_load(applied_nr):
+            self._schedule_render()
+            if applied_nr:
+                self.status_var.set(f"Session loaded from {path} and saved NR was applied.")
+            else:
+                self.status_var.set(f"Session loaded from {path}")
+
+        self._apply_saved_noise_reduction_from_session(self, session, on_complete=finish_load)
 
     def _apply_session_to_viewer(self, viewer, session, image_paths, loaded_images=None,
                                  force_sidebyside=False):
@@ -371,6 +466,7 @@ class SessionMixin:
             for key in ("brightness", "contrast", "blacks", "whites"):
                 if key in d:
                     viewer.adj_vars[i][key].set(float(d[key]))
+        self._load_noise_reduction_settings_from_session(viewer, session)
 
         viewer.annot_mode_var.set(False)
         viewer.align_mode_var.set(False)

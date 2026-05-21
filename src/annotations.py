@@ -47,6 +47,8 @@ class AnnotationMixin:
             self.canvas2.delete("level_line")
             self._level_start = None
             self.align_mode_var.set(False)
+            self.align_scale_mode_var.set(False)
+            self.move_annot_mode_var.set(False)
             self.canvas1.delete("align_pts")
             self.canvas2.delete("align_pts")
             self.crop_mode_var.set(False)
@@ -54,8 +56,34 @@ class AnnotationMixin:
             self.canvas1.delete("crop_preview")
             self.canvas2.delete("crop_preview")
         active = (self.annot_mode_var.get() or self.level_mode_var.get()
-                  or self.align_mode_var.get() or self.crop_mode_var.get())
+                  or self.align_mode_var.get() or self.align_scale_mode_var.get()
+                  or self.move_annot_mode_var.get() or self.crop_mode_var.get())
         cur = "tcross" if active else "crosshair"
+        self.canvas1.config(cursor=cur)
+        self.canvas2.config(cursor=cur)
+
+    def _on_move_annot_mode_change(self):
+        if self.move_annot_mode_var.get():
+            self.annot_mode_var.set(False)
+            self.align_mode_var.set(False)
+            self.align_scale_mode_var.set(False)
+            self.level_mode_var.set(False)
+            self.crop_mode_var.set(False)
+            self.canvas1.delete("level_line")
+            self.canvas2.delete("level_line")
+            self.canvas1.delete("align_pts")
+            self.canvas2.delete("align_pts")
+            self.canvas2.delete("align_guide")
+            self.canvas1.delete("crop_preview")
+            self.canvas2.delete("crop_preview")
+            self._level_start = None
+            self._crop_corner1 = None
+        else:
+            self._drag_annotation_index = None
+        active = (self.annot_mode_var.get() or self.level_mode_var.get()
+                  or self.align_mode_var.get() or self.align_scale_mode_var.get()
+                  or self.move_annot_mode_var.get() or self.crop_mode_var.get())
+        cur = "fleur" if self.move_annot_mode_var.get() else ("tcross" if active else "crosshair")
         self.canvas1.config(cursor=cur)
         self.canvas2.config(cursor=cur)
 
@@ -67,6 +95,8 @@ class AnnotationMixin:
         if self.level_mode_var.get():
             self.annot_mode_var.set(False)
             self.align_mode_var.set(False)
+            self.align_scale_mode_var.set(False)
+            self.move_annot_mode_var.set(False)
             self.canvas1.delete("align_pts")
             self.canvas2.delete("align_pts")
             self.crop_mode_var.set(False)
@@ -74,7 +104,8 @@ class AnnotationMixin:
             self.canvas1.delete("crop_preview")
             self.canvas2.delete("crop_preview")
         active = (self.level_mode_var.get() or self.annot_mode_var.get()
-                  or self.align_mode_var.get() or self.crop_mode_var.get())
+                  or self.align_mode_var.get() or self.align_scale_mode_var.get()
+                  or self.move_annot_mode_var.get() or self.crop_mode_var.get())
         cur = "tcross" if active else "crosshair"
         self.canvas1.config(cursor=cur)
         self.canvas2.config(cursor=cur)
@@ -86,16 +117,47 @@ class AnnotationMixin:
             self.canvas2.delete("level_line")
             self._level_start = None
             self.annot_mode_var.set(False)
+            self.align_scale_mode_var.set(False)
+            self.move_annot_mode_var.set(False)
             self.crop_mode_var.set(False)
             self._crop_corner1 = None
             self.canvas1.delete("crop_preview")
             self.canvas2.delete("crop_preview")
+            self._clear_align_pts()
         else:
             self._align_guide_cursor = None
             self.canvas1.delete("align_pts")
             self.canvas2.delete("align_pts")
             self.canvas2.delete("align_guide")
         active = (self.align_mode_var.get() or self.annot_mode_var.get()
+                  or self.align_scale_mode_var.get() or self.move_annot_mode_var.get()
+                  or self.level_mode_var.get() or self.crop_mode_var.get())
+        cur = "tcross" if active else "crosshair"
+        self.canvas1.config(cursor=cur)
+        self.canvas2.config(cursor=cur)
+        self._update_align_status()
+
+    def _on_align_scale_mode_change(self):
+        if self.align_scale_mode_var.get():
+            self.level_mode_var.set(False)
+            self.canvas1.delete("level_line")
+            self.canvas2.delete("level_line")
+            self._level_start = None
+            self.annot_mode_var.set(False)
+            self.align_mode_var.set(False)
+            self.move_annot_mode_var.set(False)
+            self.crop_mode_var.set(False)
+            self._crop_corner1 = None
+            self.canvas1.delete("crop_preview")
+            self.canvas2.delete("crop_preview")
+            self._clear_align_pts()
+        else:
+            self._align_guide_cursor = None
+            self.canvas1.delete("align_pts")
+            self.canvas2.delete("align_pts")
+            self.canvas2.delete("align_guide")
+        active = (self.align_mode_var.get() or self.align_scale_mode_var.get()
+                  or self.annot_mode_var.get() or self.move_annot_mode_var.get()
                   or self.level_mode_var.get() or self.crop_mode_var.get())
         cur = "tcross" if active else "crosshair"
         self.canvas1.config(cursor=cur)
@@ -107,11 +169,15 @@ class AnnotationMixin:
         n2 = len(self._align_pts_img2)
         n_pairs = min(n1, n2)
         can_apply = n_pairs >= 2 and self.images[0] and self.images[1]
-        self._align_apply_btn.config(state=tk.NORMAL if can_apply else tk.DISABLED)
-        if self.align_mode_var.get():
+        self._align_apply_btn.config(state=tk.NORMAL if can_apply and self.align_mode_var.get() else tk.DISABLED)
+        self._align_scale_apply_btn.config(
+            state=tk.NORMAL if can_apply and self.align_scale_mode_var.get() else tk.DISABLED
+        )
+        if self.align_mode_var.get() or self.align_scale_mode_var.get():
             next_target = "Image 1" if self._expected_align_canvas() == 0 else "Image 2"
+            mode_label = "Point align + scale" if self.align_scale_mode_var.get() else "Point align"
             self.status_var.set(
-                f"Point align  -  Image 1: {n1} pt(s)  |  Image 2: {n2} pt(s)  |  "
+                f"{mode_label}  -  Image 1: {n1} pt(s)  |  Image 2: {n2} pt(s)  |  "
                 f"{'Ready  -  click Apply' if can_apply else 'Next click: ' + next_target}"
             )
 
@@ -132,7 +198,7 @@ class AnnotationMixin:
             click_x, click_y = event.x, event.y
             n1_now = len(self._align_pts_img1)
             n2_now = len(self._align_pts_img2)
-            if n1_now >= 2 and n1_now == n2_now + 1:
+            if self.align_mode_var.get() and n1_now >= 2 and n1_now == n2_now + 1:
                 prev_img2 = self._align_pts_img2[-1]
                 gx, gy = self._img2_to_canvas2(prev_img2[0], prev_img2[1], off_x, off_y, total_rot)
                 p1a = np.array(self._align_pts_img1[-2])
@@ -162,6 +228,7 @@ class AnnotationMixin:
         self._align_pts_img2.clear()
         self._align_guide_cursor = None
         self._align_apply_btn.config(state=tk.DISABLED)
+        self._align_scale_apply_btn.config(state=tk.DISABLED)
         self.canvas1.delete("align_pts")
         self.canvas2.delete("align_pts")
         self.canvas2.delete("align_guide")
@@ -209,6 +276,53 @@ class AnnotationMixin:
             f"rotation {delta_rot:.2f}deg  | from {n} point pair(s)"
         )
 
+    def _apply_point_alignment_with_scale(self):
+        n = min(len(self._align_pts_img1), len(self._align_pts_img2))
+        if n < 2 or self.images[0] is None or self.images[1] is None:
+            return
+
+        p1 = np.array(self._align_pts_img1[:n], dtype=float)
+        p2 = np.array(self._align_pts_img2[:n], dtype=float)
+
+        glob_rot = float(self.glob_rot_var.get())
+        g = math.radians(glob_rot)
+        cos_g, sin_g = math.cos(g), math.sin(g)
+        r_g = np.array([[cos_g, -sin_g], [sin_g, cos_g]])
+
+        c1 = np.array([self.images[0].width / 2.0, self.images[0].height / 2.0])
+        c2 = np.array([self.images[1].width / 2.0, self.images[1].height / 2.0])
+
+        u = (r_g @ (p1 - c1).T).T + c1
+        u_mean = u.mean(axis=0)
+        d_mean = (p2 - c2).mean(axis=0)
+        u_c = u - u_mean
+        d_c = (p2 - c2) - d_mean
+
+        h = d_c.T @ u_c
+        u_s, singular_vals, vt = np.linalg.svd(h)
+        r_new = vt.T @ u_s.T
+        if np.linalg.det(r_new) < 0:
+            vt[-1] *= -1
+            r_new = vt.T @ u_s.T
+
+        denom = float((d_c ** 2).sum())
+        if denom <= 0.0:
+            return
+        scale = float(singular_vals.sum() / denom)
+        total_rot = math.degrees(math.atan2(r_new[1, 0], r_new[0, 0]))
+        delta_rot = total_rot - glob_rot
+        off = u_mean - c2 - scale * (r_new @ d_mean)
+
+        self.off_x_var.set(str(int(round(off[0]))))
+        self.off_y_var.set(str(int(round(off[1]))))
+        self.rot_var.set(f"{delta_rot:.2f}")
+        self.img2_scale_var.set(f"{scale:.3f}")
+        self._schedule_render()
+        self.status_var.set(
+            f"Alignment+scale applied  -  offset ({off[0]:.0f}, {off[1]:.0f}) px  | "
+            f"rotation {delta_rot:.2f}deg  | scale {scale:.3f}x  | from {n} point pair(s)"
+        )
+
     def _img2_to_canvas2(self, img2_x, img2_y, off_x, off_y, total_rot):
         cx2 = self.images[1].width / 2.0 if self.images[1] else 0.0
         cy2 = self.images[1].height / 2.0 if self.images[1] else 0.0
@@ -221,7 +335,7 @@ class AnnotationMixin:
     def _draw_align_pts(self):
         self.canvas1.delete("align_pts")
         self.canvas2.delete("align_pts")
-        if not self.align_mode_var.get():
+        if not (self.align_mode_var.get() or self.align_scale_mode_var.get()):
             return
         off_x, off_y, rot, glob_rot = self._get_alignment_values()
         total_rot = glob_rot + rot
@@ -278,13 +392,18 @@ class AnnotationMixin:
             self.annot_colour_btn.config(bg=self.annot_colour)
 
     def _on_left_press(self, event):
+        if getattr(self, "_annotation_import", None) is not None:
+            self._handle_annotation_import_target_click(event)
+            return
         if self.crop_mode_var.get():
             self._on_crop_click(event)
         elif self.level_mode_var.get():
             self._level_start = (event.x, event.y)
             event.widget.delete("level_line")
-        elif self.align_mode_var.get():
+        elif self.align_mode_var.get() or self.align_scale_mode_var.get():
             self._add_align_point(event)
+        elif self.move_annot_mode_var.get():
+            self._start_move_annotation(event)
         elif self.annot_mode_var.get():
             self._place_annotation(event)
         else:
@@ -300,12 +419,18 @@ class AnnotationMixin:
                 event.widget.create_line(x0, y0, event.x, event.y,
                                          fill="#ffff44", width=2,
                                          tags="level_line", dash=(6, 4))
-        elif self.align_mode_var.get():
+        elif self.align_mode_var.get() or self.align_scale_mode_var.get():
             pass
+        elif self.move_annot_mode_var.get() and self._drag_annotation_index is not None:
+            self._move_annotation_to(event)
         elif not self.annot_mode_var.get():
             self._on_pan(event)
 
     def _on_left_release(self, event):
+        if self.move_annot_mode_var.get() and self._drag_annotation_index is not None:
+            self._move_annotation_to(event)
+            self._drag_annotation_index = None
+            return
         if not self.level_mode_var.get() or self._level_start is None:
             return
         x0, y0 = self._level_start
@@ -323,6 +448,48 @@ class AnnotationMixin:
                 current = 0.0
             self.glob_rot_var.set(f"{current + angle:.2f}")
             self._schedule_render()
+
+    def _find_annotation_at_event(self, event):
+        if not self.annotations:
+            return None
+        off_x, off_y, rot, glob_rot = self._get_alignment_values()
+        total_rot = glob_rot + rot
+        canvas_is_2 = (event.widget == self.canvas2)
+        tolerance = 30
+        closest, min_dist = None, float("inf")
+        for i, ann in enumerate(self.annotations):
+            if canvas_is_2 and self.images[1] is not None:
+                cx, cy = self._img2_to_canvas2(ann["img2_x"], ann["img2_y"],
+                                               off_x, off_y, total_rot)
+            else:
+                cx, cy = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
+            d = math.hypot(event.x - cx, event.y - cy)
+            if d < tolerance and d < min_dist:
+                min_dist, closest = d, i
+        return closest
+
+    def _start_move_annotation(self, event):
+        idx = self._find_annotation_at_event(event)
+        if idx is None:
+            self._drag_annotation_index = None
+            self.status_var.set("Move ann  -  click nearer to an annotation to drag it.")
+            return
+        self._drag_annotation_index = idx
+        self._move_annotation_to(event)
+
+    def _move_annotation_to(self, event):
+        idx = self._drag_annotation_index
+        if idx is None:
+            return
+        img1_x, img1_y = self._canvas_to_img1(event.x, event.y)
+        img2_x, img2_y = self._canvas_to_img2(event.x, event.y)
+        ann = self.annotations[idx]
+        ann["img1_x"] = img1_x
+        ann["img1_y"] = img1_y
+        ann["img2_x"] = img2_x
+        ann["img2_y"] = img2_y
+        self.status_var.set(f"Move ann  -  dragging annotation {idx + 1}")
+        self._schedule_render()
 
     def _place_annotation(self, event):
         if self.images[0] is None and self.images[1] is None:
@@ -354,22 +521,9 @@ class AnnotationMixin:
         self._schedule_render()
 
     def _on_right_click(self, event):
-        if not self.annotations:
+        if self.move_annot_mode_var.get() or not self.annotations:
             return
-        off_x, off_y, rot, glob_rot = self._get_alignment_values()
-        total_rot = glob_rot + rot
-        canvas_is_2 = (event.widget == self.canvas2)
-        tolerance = 30
-        closest, min_dist = None, float("inf")
-        for i, ann in enumerate(self.annotations):
-            if canvas_is_2 and self.images[1] is not None:
-                cx, cy = self._img2_to_canvas2(ann["img2_x"], ann["img2_y"],
-                                               off_x, off_y, total_rot)
-            else:
-                cx, cy = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
-            d = math.hypot(event.x - cx, event.y - cy)
-            if d < tolerance and d < min_dist:
-                min_dist, closest = d, i
+        closest = self._find_annotation_at_event(event)
         if closest is not None:
             del self.annotations[closest]
             self._schedule_render()

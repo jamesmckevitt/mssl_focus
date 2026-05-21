@@ -30,24 +30,32 @@ def main():
     # ------------------------------------------------------------------ #
     from PIL import Image, ImageDraw
 
+    # Mesh grid icon
     sz = 256
+    m = 14          # outer margin
+    g = 20          # grid inset from background edge
+    n = 5           # cells per side (6 lines each direction)
     img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    m = 10
-    # Outer ring — filter housing
-    d.ellipse([m, m, sz - m - 1, sz - m - 1],
-              fill="#1a3a5c", outline="#4a8ab5", width=14)
-    # Mid ring — thin-film coating layers
-    q = sz // 4
-    d.ellipse([q, q, sz - q, sz - q],
-              fill="#0d2540", outline="#6ab0dc", width=8)
-    # Inner ring
-    e = sz * 3 // 8
-    d.ellipse([e, e, sz - e, sz - e],
-              fill="#162e48", outline="#90c8e8", width=5)
-    # Centre spot
-    c0, c1 = sz * 7 // 16, sz * 9 // 16
-    d.ellipse([c0, c0, c1, c1], fill="#b0deff")
+    # Background square
+    d.rectangle([m, m, sz - m - 1, sz - m - 1],
+                fill="#1a3a5c", outline="#6ab0dc", width=3)
+    # Grid lines
+    g0 = m + g
+    g1 = sz - m - g - 1
+    for i in range(n + 1):
+        t = i / n
+        x = round(g0 + t * (g1 - g0))
+        y = round(g0 + t * (g1 - g0))
+        d.line([(x, g0), (x, g1)], fill="#4a9eff", width=3)
+        d.line([(g0, y), (g1, y)], fill="#4a9eff", width=3)
+    # Dots at intersections
+    dr = 6
+    for i in range(n + 1):
+        for j in range(n + 1):
+            cx = round(g0 + (i / n) * (g1 - g0))
+            cy = round(g0 + (j / n) * (g1 - g0))
+            d.ellipse([cx - dr, cy - dr, cx + dr, cy + dr], fill="#b0deff")
 
     img.save(
         "app.ico",

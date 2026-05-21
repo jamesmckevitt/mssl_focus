@@ -178,10 +178,12 @@ class AnnotationMixin:
         n2 = len(self._align_pts_img2)
         n_pairs = min(n1, n2)
         can_apply = n_pairs >= 2 and self.images[0] and self.images[1]
-        self._align_apply_btn.config(state=tk.NORMAL if can_apply and self.align_mode_var.get() else tk.DISABLED)
-        self._align_scale_apply_btn.config(
-            state=tk.NORMAL if can_apply and self.align_scale_mode_var.get() else tk.DISABLED
-        )
+        align_state = tk.NORMAL if can_apply and self.align_mode_var.get() else tk.DISABLED
+        align_scale_state = tk.NORMAL if can_apply and self.align_scale_mode_var.get() else tk.DISABLED
+        self._align_apply_btn.config(state=align_state)
+        self._align_scale_apply_btn.config(state=align_scale_state)
+        self._set_menu_entry_state(getattr(self, "_align_apply_menu_ref", None), align_state)
+        self._set_menu_entry_state(getattr(self, "_align_scale_apply_menu_ref", None), align_scale_state)
         if self.align_mode_var.get() or self.align_scale_mode_var.get():
             next_target = "Image 1" if self._expected_align_canvas() == 0 else "Image 2"
             mode_label = "Point align + scale" if self.align_scale_mode_var.get() else "Point align"
@@ -238,6 +240,8 @@ class AnnotationMixin:
         self._align_guide_cursor = None
         self._align_apply_btn.config(state=tk.DISABLED)
         self._align_scale_apply_btn.config(state=tk.DISABLED)
+        self._set_menu_entry_state(getattr(self, "_align_apply_menu_ref", None), tk.DISABLED)
+        self._set_menu_entry_state(getattr(self, "_align_scale_apply_menu_ref", None), tk.DISABLED)
         self.canvas1.delete("align_pts")
         self.canvas2.delete("align_pts")
         self.canvas2.delete("align_guide")

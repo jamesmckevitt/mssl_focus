@@ -11,7 +11,7 @@ No Python required, the executables are fully self-contained.
 | Windows  | [![Download for Windows](https://img.shields.io/github/v/release/jamesmckevitt/solc_filter_inspector?label=Download%20%28Windows%29&color=0078D4&logoColor=white)](https://github.com/jamesmckevitt/solc_filter_inspector/releases/latest/download/mssl_filter_inspector.exe) |
 | Linux    | [![Download for Linux](https://img.shields.io/github/v/release/jamesmckevitt/solc_filter_inspector?label=Download%20%28Linux%29&color=FCC624&logoColor=black)](https://github.com/jamesmckevitt/solc_filter_inspector/releases/latest/download/mssl_filter_inspector) |
 
-> **Linux note:** the binary targets Ubuntu 22/24 (glibc >= 2.35).
+> **Note:** This software is developed in Linux and the executable for Windows is tested.
 
 ## Features
 

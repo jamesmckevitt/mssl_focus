@@ -4,7 +4,6 @@ from tkinter import filedialog
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-from .constants import ANNOTATION_WIDTH
 from .metadata import APP_VERSION
 
 
@@ -106,7 +105,7 @@ class CropMixin:
         drw.text((bx + pad - bb[0], by + pad - bb[1]),
                  text, fill="#cccccc", font=font)
 
-    def _render_crop_pil(self, x0, y0, x1, y1, label_size=12, legend_size=None):
+    def _render_crop_pil(self, x0, y0, x1, y1, label_size=12, legend_size=None, ann_width=None):
         off_x, off_y, rot, glob_rot = self._get_alignment_values()
         total_rot = glob_rot + rot
         mode = self.mode_var.get()
@@ -134,7 +133,8 @@ class CropMixin:
         pil_label_size = max(1, round(label_size * zoom_inv))
         leg_size = legend_size if legend_size is not None else self.canvas_legend_size_var.get()
         pil_legend_size = max(1, round(leg_size * zoom_inv))
-        ann_width = max(1, round(ANNOTATION_WIDTH * zoom_inv))
+        _aw = ann_width if ann_width is not None else self.annot_width_var.get()
+        ann_width = max(1, round(_aw * zoom_inv))
 
         try:
             label_font = ImageFont.load_default(size=pil_label_size)
@@ -202,6 +202,7 @@ class CropMixin:
 
         label_size_var = tk.IntVar(value=default_label_size)
         legend_size_var = tk.IntVar(value=default_legend_size)
+        ann_width_var = tk.DoubleVar(value=self.annot_width_var.get())
         photo_ref = [None]
         current_result = [None]
 
@@ -213,6 +214,7 @@ class CropMixin:
                 x0, y0, x1, y1,
                 label_size=label_size_var.get(),
                 legend_size=legend_size_var.get(),
+                ann_width=ann_width_var.get(),
             )
             current_result[0] = result
             max_w = max(400, min(self.root.winfo_screenwidth() - 120, 1400))
@@ -234,16 +236,17 @@ class CropMixin:
         ctrl = tk.Frame(win, bg="#2b2b2b")
         ctrl.pack(side=tk.TOP, fill=tk.X, padx=8, pady=4)
 
-        for text, var, lo, hi in [
-            ("Annotation label size (pt)", label_size_var, 6, 60),
-            ("Legend text size (pt)", legend_size_var, 6, 60),
+        for text, var, lo, hi, res in [
+            ("Annotation label size (pt)", label_size_var, 6, 60, 1),
+            ("Legend text size (pt)", legend_size_var, 6, 60, 1),
+            ("Annotation width", ann_width_var, 0.5, 3.5, 0.5),
         ]:
             col = tk.Frame(ctrl, bg="#2b2b2b")
             col.pack(side=tk.LEFT, padx=16)
             tk.Label(col, text=text, bg="#2b2b2b", fg="#ccc",
                      font=("TkDefaultFont", 9)).pack(anchor=tk.W)
             tk.Scale(col, variable=var, from_=lo, to=hi,
-                     orient=tk.HORIZONTAL, length=220,
+                     resolution=res, orient=tk.HORIZONTAL, length=220,
                      bg="#2b2b2b", fg="#ccc", troughcolor="#444",
                      highlightthickness=0,
                      command=render_preview).pack()

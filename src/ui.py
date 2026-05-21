@@ -58,6 +58,10 @@ class UIBuilderMixin:
         self.rot_var = tk.StringVar(value="0.0")
         self._make_spinbox(toolbar2, self.rot_var, -180, 180, inc=0.1, width=6)
 
+        tk.Label(toolbar2, text="  Scale:", bg="#2f2f2f", fg="#ccc").pack(side=tk.LEFT, padx=(12, 2))
+        self.img2_scale_var = tk.StringVar(value="1.000")
+        self._make_spinbox(toolbar2, self.img2_scale_var, 0.1, 10.0, inc=0.01, width=6)
+
         tk.Label(toolbar2, text="  [Arrow keys nudge X/Y  | Shift+Arrow nudges rotation]",
                  bg="#2f2f2f", fg="#888", font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=12)
 
@@ -121,6 +125,12 @@ class UIBuilderMixin:
                        bg="#1e1e2e", fg="#ccc", selectcolor="#444",
                        activebackground="#1e1e2e").pack(side=tk.LEFT, padx=4)
 
+        self.move_annot_mode_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(toolbar4, text="Move ann",
+                   variable=self.move_annot_mode_var, command=self._on_move_annot_mode_change,
+                   bg="#1e1e2e", fg="#ffbb88", selectcolor="#444",
+                   activebackground="#1e1e2e").pack(side=tk.LEFT, padx=4)
+
         tk.Button(toolbar4, text="Clear all", command=self._clear_annotations,
                   bg="#663333", fg="white", relief=tk.FLAT, padx=6, pady=2,
                   cursor="hand2").pack(side=tk.LEFT, padx=6)
@@ -144,6 +154,20 @@ class UIBuilderMixin:
             bg="#224444", fg="#88ffff", relief=tk.FLAT, padx=6, pady=2,
             cursor="hand2", state=tk.DISABLED)
         self._align_apply_btn.pack(side=tk.LEFT, padx=2)
+
+        self.align_scale_mode_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(toolbar4,
+                       text=" Point align + scale  (final click free; 2 pairs needed)",
+                       variable=self.align_scale_mode_var, command=self._on_align_scale_mode_change,
+                       bg="#1e1e2e", fg="#88ffbb", selectcolor="#444",
+                       activebackground="#1e1e2e").pack(side=tk.LEFT, padx=(8, 2))
+
+        self._align_scale_apply_btn = tk.Button(
+            toolbar4, text="Apply align+scale",
+            command=self._apply_point_alignment_with_scale,
+            bg="#225544", fg="#88ffbb", relief=tk.FLAT, padx=6, pady=2,
+            cursor="hand2", state=tk.DISABLED)
+        self._align_scale_apply_btn.pack(side=tk.LEFT, padx=2)
 
         tk.Button(toolbar4, text="Clear pts", command=self._clear_align_pts,
                   bg="#224444", fg="#88ffff", relief=tk.FLAT, padx=4, pady=2,
@@ -238,6 +262,10 @@ class UIBuilderMixin:
         tk.Button(toolbar6, text="Load session", command=self._load_session,
                   bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=8, pady=2,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+        tk.Button(toolbar6, text="Import annotations", command=self._import_annotations_from_session,
+              bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=8, pady=2,
+              cursor="hand2").pack(side=tk.LEFT, padx=4)
 
         self.canvas_frame = tk.Frame(self.root, bg="#1e1e1e")
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)

@@ -5,7 +5,7 @@ from tkinter import colorchooser, messagebox, simpledialog
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageTk
 
-from .constants import ANNOTATION_WIDTH, _PRESET_COLOURS
+from .constants import _PRESET_COLOURS
 
 
 class AnnotationMixin:
@@ -531,7 +531,7 @@ class AnnotationMixin:
 
             cx, cy = self._img1_to_canvas1(ix1, iy1, glob_rot)
             self.canvas1.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                     outline=colour, width=ANNOTATION_WIDTH, tags="annotations")
+                                     outline=colour, width=self.annot_width_var.get(), tags="annotations")
             if label:
                 self.canvas1.create_text(cx + r + 5, cy, text=label, fill=colour,
                                          anchor=tk.W, tags="annotations",
@@ -540,7 +540,7 @@ class AnnotationMixin:
             if mode == "sidebyside" and self.images[1] is not None:
                 cx2, cy2 = self._img2_to_canvas2(ix2, iy2, off_x, off_y, total_rot)
                 self.canvas2.create_oval(cx2 - r, cy2 - r, cx2 + r, cy2 + r,
-                                         outline=colour, width=ANNOTATION_WIDTH, tags="annotations")
+                                         outline=colour, width=self.annot_width_var.get(), tags="annotations")
                 if label:
                     self.canvas2.create_text(cx2 + r + 5, cy2, text=label, fill=colour,
                                              anchor=tk.W, tags="annotations",

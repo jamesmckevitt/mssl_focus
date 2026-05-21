@@ -13,8 +13,11 @@ Run: python image_comparer.py
 import tkinter as tk
 import math
 import json
+import datetime
+import os
+import sys
 from tkinter import filedialog, messagebox, ttk, colorchooser, simpledialog
-from PIL import Image, ImageTk, ImageDraw, ImageEnhance
+from PIL import Image, ImageTk, ImageDraw, ImageEnhance, ImageFont
 import numpy as np
 
 
@@ -26,12 +29,34 @@ _PRESET_COLOURS = [
 ]
 
 
+def _read_app_version():
+    """Read version from _version.txt bundled at build time; fall back to 'dev'."""
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    vfile = os.path.join(base, '_version.txt')
+    try:
+        with open(vfile) as f:
+            return f.read().strip() or 'dev'
+    except OSError:
+        return 'dev'
+
+
+APP_VERSION = _read_app_version()
+
+__author__ = "James McKevitt"
+__institution__ = "UCL MSSL"
+__email__ = "jm2@mssl.ucl.ac.uk"
+
+
 class ImageComparer:
     def __init__(self, root):
         self.root = root
         self.root.title("MSSL thin-film filter inspector")
         self.root.geometry("1400x900")
         self.root.configure(bg="#2b2b2b")
+        self._set_app_icon()
 
         self.images = [None, None]       # Original PIL images (full res)
         self.image_paths = [None, None]  # Filesystem paths for save/load session
@@ -59,6 +84,7 @@ class ImageComparer:
         # Annotation state
         self.annotations = []       # list of {img1_x, img1_y, img2_x, img2_y, radius, colour, label}
         self.annot_colour = "#ff0000"
+        self.colour_labels = {}     # colour_hex -> legend label string (set on first use)
 
         # Level line tool
         self._level_start = None   # (x, y) canvas coords while drawing
@@ -70,6 +96,10 @@ class ImageComparer:
 
         # Crop export tool
         self._crop_corner1 = None  # canvas (x, y) of first crop corner, or None
+
+        # Font size controls for canvas annotations/legend and export preview
+        self.annot_label_size_var = tk.IntVar(value=16)
+        self.canvas_legend_size_var = tk.IntVar(value=13)
 
         # Per-image adjustment variables (brightness, contrast, blacks, whites)
         self.adj_vars = [
@@ -215,13 +245,11 @@ class ImageComparer:
                   bg="#663333", fg="white", relief=tk.FLAT, padx=6, pady=2,
                   cursor="hand2").pack(side=tk.LEFT, padx=6)
 
+        tk.Button(toolbar4, text="Edit labels", command=self._edit_colour_labels,
+                  bg="#444466", fg="#ccccff", relief=tk.FLAT, padx=6, pady=2,
+                  cursor="hand2").pack(side=tk.LEFT, padx=2)
+
         tk.Frame(toolbar4, bg="#666", width=2, height=20).pack(side=tk.LEFT, padx=6, fill=tk.Y)
-
-        tk.Button(toolbar4, text=" Export PNG", command=self._export,
-                  bg="#336633", fg="white", relief=tk.FLAT, padx=8, pady=2,
-                  cursor="hand2").pack(side=tk.LEFT, padx=4)
-
-        tk.Frame(toolbar4, bg="#666", width=2, height=20).pack(side=tk.LEFT, padx=8, fill=tk.Y)
 
         self.align_mode_var = tk.BooleanVar(value=False)
         tk.Checkbutton(toolbar4,
@@ -240,6 +268,20 @@ class ImageComparer:
         tk.Button(toolbar4, text="Clear pts", command=self._clear_align_pts,
                   bg="#224444", fg="#88ffff", relief=tk.FLAT, padx=4, pady=2,
                   cursor="hand2").pack(side=tk.LEFT, padx=2)
+
+        tk.Frame(toolbar4, bg="#666", width=2, height=20).pack(side=tk.LEFT, padx=6, fill=tk.Y)
+        tk.Label(toolbar4, text="Label pt:", bg="#1e1e2e", fg="#ccc",
+                 font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(4, 1))
+        tk.Scale(toolbar4, variable=self.annot_label_size_var, from_=6, to=48,
+                 orient=tk.HORIZONTAL, length=100, bg="#1e1e2e", fg="#ccc",
+                 troughcolor="#444", highlightthickness=0, sliderlength=10,
+                 command=lambda _: self._schedule_render()).pack(side=tk.LEFT, padx=1)
+        tk.Label(toolbar4, text="Legend pt:", bg="#1e1e2e", fg="#ccc",
+                 font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(6, 1))
+        tk.Scale(toolbar4, variable=self.canvas_legend_size_var, from_=6, to=36,
+                 orient=tk.HORIZONTAL, length=100, bg="#1e1e2e", fg="#ccc",
+                 troughcolor="#444", highlightthickness=0, sliderlength=10,
+                 command=lambda _: self._schedule_render()).pack(side=tk.LEFT, padx=1)
 
         # ---- Fifth toolbar row: per-image adjustments ----
         toolbar5 = tk.Frame(self.root, bg="#12121a", pady=4)
@@ -1126,13 +1168,22 @@ class ImageComparer:
         if self.annot_label_var.get():
             label = simpledialog.askstring("Label", "Annotation label (leave blank for none):",
                                            parent=self.root) or ""
+        colour = self.annot_colour
+        if colour not in self.colour_labels:
+            lbl = simpledialog.askstring(
+                "New annotation colour",
+                f"First use of colour {colour}.\n"
+                "Add a legend label for this colour (leave blank to skip):",
+                parent=self.root,
+            ) or ""
+            self.colour_labels[colour] = lbl
         self.annotations.append({
             "img1_x": img1_x,
             "img1_y": img1_y,
             "img2_x": img2_x,
             "img2_y": img2_y,
             "radius": self.annot_radius_var.get(),
-            "colour": self.annot_colour,
+            "colour": colour,
             "label": label,
         })
         self._schedule_render()
@@ -1168,6 +1219,87 @@ class ImageComparer:
         self.annotations.clear()
         self.canvas1.delete("annotations")
         self.canvas2.delete("annotations")
+        self.canvas1.delete("legend")
+        self.canvas2.delete("legend")
+
+    def _edit_colour_labels(self):
+        """Open a dialog to rename the legend label for each annotation colour."""
+        if not self.colour_labels:
+            messagebox.showinfo("Edit labels",
+                                "No colour labels yet.\n"
+                                "Annotate with a colour first to create a label.",
+                                parent=self.root)
+            return
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Edit colour labels")
+        dlg.configure(bg="#2b2b2b")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        tk.Label(dlg, text="Edit legend label for each annotation colour:",
+                 bg="#2b2b2b", fg="#ccc",
+                 font=("TkDefaultFont", 9)).pack(padx=12, pady=(10, 6), anchor=tk.W)
+
+        entries = {}
+        frame = tk.Frame(dlg, bg="#2b2b2b")
+        frame.pack(padx=12, pady=4, fill=tk.X)
+
+        for colour, label in self.colour_labels.items():
+            row = tk.Frame(frame, bg="#2b2b2b")
+            row.pack(fill=tk.X, pady=3)
+            tk.Label(row, bg=colour, width=3, height=1,
+                     relief=tk.FLAT).pack(side=tk.LEFT, padx=(0, 8))
+            tk.Label(row, text=colour, bg="#2b2b2b", fg="#888",
+                     font=("TkFixedFont", 9), width=8).pack(side=tk.LEFT)
+            var = tk.StringVar(value=label)
+            tk.Entry(row, textvariable=var, bg="#444", fg="white",
+                     insertbackground="white", relief=tk.FLAT,
+                     width=26).pack(side=tk.LEFT, padx=(6, 0))
+            entries[colour] = var
+
+        confirmed = [False]
+
+        def on_ok():
+            confirmed[0] = True
+            dlg.destroy()
+
+        btn_row = tk.Frame(dlg, bg="#2b2b2b")
+        btn_row.pack(pady=(8, 10))
+        tk.Button(btn_row, text="OK", command=on_ok,
+                  bg="#336633", fg="white", relief=tk.FLAT, padx=14, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=6)
+        tk.Button(btn_row, text="Cancel", command=dlg.destroy,
+                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=6)
+
+        dlg.wait_window()
+        if confirmed[0]:
+            for colour, var in entries.items():
+                self.colour_labels[colour] = var.get()
+            self._schedule_render()
+
+    def _set_app_icon(self):
+        """Generate and apply a filter/lens icon as the window icon."""
+        try:
+            sz = 64
+            img = Image.new('RGBA', (sz, sz), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            m = 3
+            # Outer ring — filter housing
+            d.ellipse([m, m, sz - m - 1, sz - m - 1],
+                      fill='#1a3a5c', outline='#4a8ab5', width=5)
+            # Mid ring — thin-film coating layers
+            q = sz // 4
+            d.ellipse([q, q, sz - q, sz - q],
+                      fill='#0d2540', outline='#6ab0dc', width=3)
+            # Centre spot
+            c0, c1 = sz * 7 // 16, sz * 9 // 16
+            d.ellipse([c0, c0, c1, c1], fill='#b0deff')
+            photo = ImageTk.PhotoImage(img)
+            self.root.iconphoto(True, photo)
+            self._icon_photo = photo  # keep reference so GC doesn't collect it
+        except Exception:
+            pass  # icon is cosmetic — never crash on failure
 
     def _apply_adjustments(self, img, idx):
         """Apply per-image blacks/whites/brightness/contrast to a PIL image."""
@@ -1216,6 +1348,8 @@ class ImageComparer:
         self.canvas1.delete("annotations")
         self.canvas2.delete("annotations")
         if not self.annotations:
+            self.canvas1.delete("legend")
+            self.canvas2.delete("legend")
             return
         for ann in self.annotations:
             ix1, iy1 = ann["img1_x"], ann["img1_y"]
@@ -1227,119 +1361,112 @@ class ImageComparer:
             # Draw on canvas-1 (always)
             cx, cy = self._img1_to_canvas1(ix1, iy1, glob_rot)
             self.canvas1.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                     outline=colour, width=2, tags="annotations")
+                                     outline=colour, width=3, tags="annotations")
             if label:
                 self.canvas1.create_text(cx + r + 5, cy, text=label, fill=colour,
                                          anchor=tk.W, tags="annotations",
-                                         font=("TkDefaultFont", 9, "bold"))
+                                         font=("TkDefaultFont", self.annot_label_size_var.get(), "bold"))
 
             # Draw on canvas-2 (side-by-side only)
             if mode == "sidebyside" and self.images[1] is not None:
                 cx2, cy2 = self._img2_to_canvas2(ix2, iy2, off_x, off_y, total_rot)
                 self.canvas2.create_oval(cx2 - r, cy2 - r, cx2 + r, cy2 + r,
-                                         outline=colour, width=2, tags="annotations")
+                                         outline=colour, width=3, tags="annotations")
                 if label:
                     self.canvas2.create_text(cx2 + r + 5, cy2, text=label, fill=colour,
                                              anchor=tk.W, tags="annotations",
-                                             font=("TkDefaultFont", 9, "bold"))
+                                             font=("TkDefaultFont", self.annot_label_size_var.get(), "bold"))
 
+        self._draw_legend(self.canvas1)
+        if mode == "sidebyside":
+            self._draw_legend(self.canvas2)
         self.canvas1.tag_raise("annotations")
         if mode == "sidebyside":
             self.canvas2.tag_raise("annotations")
+        self.canvas1.tag_raise("legend")
+        if mode == "sidebyside":
+            self.canvas2.tag_raise("legend")
 
-    # ----------------------------------------------------------------- Export
+    # ----------------------------------------------------------------- Legend
 
-    def _export(self):
-        off_x, off_y, rot, glob_rot = self._get_alignment_values()
-        total_rot = glob_rot + rot
-        mode = self.mode_var.get()
-        was_interacting = self._interacting
-        self._interacting = False
+    def _legend_data(self):
+        """Return [(colour, label, count)] for every colour that has >= 1 annotation."""
+        counts = {}
+        for ann in self.annotations:
+            counts[ann["colour"]] = counts.get(ann["colour"], 0) + 1
+        return [(c, self.colour_labels.get(c, ""), n) for c, n in counts.items()]
 
-        # ---- Render at native (1 source-pixel = 1 output-pixel) resolution ----
-        current_zoom = self.zoom
-        saved_pan_x, saved_pan_y = self.pan_x, self.pan_y
+    def _draw_legend(self, canvas):
+        """Draw the colour legend in the bottom-right corner of a tkinter canvas."""
+        import tkinter.font as tkfont
+        canvas.delete("legend")
+        data = self._legend_data()
+        if not data:
+            return
+        w, h = canvas.winfo_width(), canvas.winfo_height()
+        if w < 2 or h < 2:
+            return
+        lsz = self.canvas_legend_size_var.get()
+        pad = max(5, lsz // 2)
+        row_h = max(16, int(lsz * 1.8))
+        swatch = max(8, int(lsz * 0.85))
+        fnt = tkfont.Font(size=lsz)
+        texts = [
+            f" {label}  (n={count})" if label else f" (n={count})"
+            for _, label, count in data
+        ]
+        box_w = max((fnt.measure(t) for t in texts), default=60) + pad * 2 + swatch + 4
+        box_h = pad * 2 + len(data) * row_h
+        x0 = w - pad - box_w
+        y0 = h - pad - box_h
+        canvas.create_rectangle(x0, y0, x0 + box_w, y0 + box_h,
+                                 fill="#1e1e1e", outline="#555555", width=1,
+                                 tags="legend")
+        for i, ((colour, _label, _count), text) in enumerate(zip(data, texts)):
+            row_y = y0 + pad + i * row_h
+            sy = row_y + (row_h - swatch) // 2
+            canvas.create_rectangle(x0 + pad, sy, x0 + pad + swatch, sy + swatch,
+                                     fill=colour, outline="", tags="legend")
+            canvas.create_text(x0 + pad + swatch + 4, row_y + row_h // 2,
+                                text=text, fill=colour, anchor=tk.W,
+                                font=("TkDefaultFont", lsz), tags="legend")
 
-        # Best image resolution caps the output size so we don't produce a huge
-        # grey-padded canvas when the user is zoomed far out.
-        imgs_loaded = [img for img in self.images if img is not None]
-        best_w = max((img.width  for img in imgs_loaded), default=1)
-        best_h = max((img.height for img in imgs_loaded), default=1)
-
-        w1 = max(self.canvas1.winfo_width(), 1)
-        h1 = max(self.canvas1.winfo_height(), 1)
-        out_w1 = max(1, min(int(round(w1 / current_zoom)), best_w))
-        out_h1 = max(1, min(int(round(h1 / current_zoom)), best_h))
-
-        self.zoom  = 1.0
-        self.pan_x = saved_pan_x / current_zoom
-        self.pan_y = saved_pan_y / current_zoom
-
-        v1 = self._get_view(self.images[0], 0, 0, glob_rot, out_w1, out_h1, idx=0).convert("RGB")
-
-        if mode == "overlay":
-            v2 = self._get_view(self.images[1], off_x, off_y,
-                                 total_rot, out_w1, out_h1, idx=1).convert("RGB")
-            alpha = self.opacity_var.get()
-            if self.images[0] and self.images[1]:
-                result = Image.blend(v1, v2, alpha)
-            elif self.images[0]:
-                result = v1
-            else:
-                result = v2
-            drw = ImageDraw.Draw(result)
-            for ann in self.annotations:
-                cx, cy = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
-                r = max(2, int(round(ann["radius"] * self.zoom)))
-                drw.ellipse([cx - r, cy - r, cx + r, cy + r],
-                            outline=ann["colour"], width=2)
-                if ann.get("label"):
-                    drw.text((cx + r + 5, cy - 8), ann["label"], fill=ann["colour"])
-        else:
-            w2 = max(self.canvas2.winfo_width(), 1)
-            h2 = max(self.canvas2.winfo_height(), 1)
-            out_w2 = max(1, min(int(round(w2 / current_zoom)), best_w))
-            out_h2 = max(1, min(int(round(h2 / current_zoom)), best_h))
-            v2 = self._get_view(self.images[1], off_x, off_y,
-                                 total_rot, out_w2, out_h2, idx=1).convert("RGB")
-            gap = 4
-            result = Image.new("RGB", (out_w1 + gap + out_w2, max(out_h1, out_h2)), (40, 40, 40))
-            result.paste(v1, (0, 0))
-            result.paste(v2, (out_w1 + gap, 0))
-            drw = ImageDraw.Draw(result)
-            for ann in self.annotations:
-                r = max(2, int(round(ann["radius"] * self.zoom)))
-                # Left panel
-                cx1e, cy1e = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
-                drw.ellipse([cx1e - r, cy1e - r, cx1e + r, cy1e + r],
-                            outline=ann["colour"], width=2)
-                if ann.get("label"):
-                    drw.text((cx1e + r + 5, cy1e - 8), ann["label"], fill=ann["colour"])
-                # Right panel
-                if self.images[1] is not None:
-                    cx2e, cy2e = self._img2_to_canvas2(ann["img2_x"], ann["img2_y"],
-                                                       off_x, off_y, total_rot)
-                    drw.ellipse([out_w1 + gap + cx2e - r, cy2e - r,
-                                 out_w1 + gap + cx2e + r, cy2e + r],
-                                outline=ann["colour"], width=2)
-                    if ann.get("label"):
-                        drw.text((out_w1 + gap + cx2e + r + 5, cy2e - 8),
-                                 ann["label"], fill=ann["colour"])
-
-        self.zoom  = current_zoom
-        self.pan_x = saved_pan_x
-        self.pan_y = saved_pan_y
-        self._interacting = was_interacting
-
-        path = filedialog.asksaveasfilename(
-            title="Export view as PNG",
-            defaultextension=".png",
-            filetypes=[("PNG \u2013 lossless", "*.png"),
-                       ("TIFF \u2013 lossless with metadata", "*.tif *.tiff")]
-        )
-        if path:
-            result.save(path, compress_level=3)
-            self.status_var.set(f"Exported \u2192 {path}")
+    def _attach_legend_sidebar(self, result, font_size=None):
+        """Return a new image with the colour legend in a right-hand sidebar."""
+        data = self._legend_data()
+        if not data:
+            return result
+        img_h = result.height
+        if font_size is None:
+            font_size = max(12, img_h // 50)
+        pad = max(8, font_size // 2)
+        row_h = int(font_size * 1.7)
+        swatch = int(font_size * 0.9)
+        try:
+            legend_font = ImageFont.load_default(size=font_size)
+        except TypeError:
+            legend_font = ImageFont.load_default()
+        texts = [
+            f" {label}  (n={count})" if label else f" (n={count})"
+            for _, label, count in data
+        ]
+        tmp_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        max_text_w = max(tmp_draw.textbbox((0, 0), t, font=legend_font)[2] for t in texts)
+        box_w = pad * 2 + swatch + 6 + max_text_w
+        box_h = pad * 2 + len(data) * row_h
+        sidebar_w = box_w + pad * 2
+        final = Image.new("RGB", (result.width + sidebar_w, img_h), (30, 30, 30))
+        final.paste(result, (0, 0))
+        drw = ImageDraw.Draw(final)
+        x0 = result.width + pad
+        y0 = max(pad, (img_h - box_h) // 2)
+        drw.rectangle([x0, y0, x0 + box_w, y0 + box_h], fill="#1e1e1e", outline="#555555")
+        for i, ((colour, _label, _count), text) in enumerate(zip(data, texts)):
+            row_y = y0 + pad + i * row_h
+            sy = row_y + (row_h - swatch) // 2
+            drw.rectangle([x0 + pad, sy, x0 + pad + swatch, sy + swatch], fill=colour)
+            drw.text((x0 + pad + swatch + 6, sy), text, fill=colour, font=legend_font)
+        return final
 
     # ----------------------------------------------------------------- Crop export
 
@@ -1387,26 +1514,44 @@ class ImageComparer:
             self._on_crop_mode_change()   # clears corner + preview, resets cursor
             self._do_export_crop(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
 
-    def _do_export_crop(self, x0, y0, x1, y1):
-        """Render both images cropped to the canvas-coord rectangle at native resolution."""
+    def _draw_watermark_pil(self, img):
+        """Draw an attribution note in the bottom-left corner of a PIL Image in-place."""
+        font_size = max(8, min(img.width, img.height) // 80)
+        try:
+            font = ImageFont.load_default(size=font_size)
+        except TypeError:
+            font = ImageFont.load_default()
+        text = (f"MSSL Filter Inspector v{APP_VERSION}"
+                f"  |  {datetime.date.today().isoformat()}")
+        drw = ImageDraw.Draw(img)
+        bb = drw.textbbox((0, 0), text, font=font)
+        tw = bb[2] - bb[0]
+        th = bb[3] - bb[1]
+        pad = max(4, font_size // 3)
+        bx = pad
+        by = img.height - pad - th - pad * 2
+        drw.rectangle([bx, by, bx + tw + pad * 2, by + th + pad * 2],
+                      fill="#1e1e1e", outline="#555555")
+        drw.text((bx + pad - bb[0], by + pad - bb[1]),
+                 text, fill="#cccccc", font=font)
+
+    def _render_crop_pil(self, x0, y0, x1, y1, label_size=12, legend_size=None):
+        """Render the crop region at native resolution and return a PIL Image."""
         off_x, off_y, rot, glob_rot = self._get_alignment_values()
         total_rot = glob_rot + rot
         mode = self.mode_var.get()
         was_interacting = self._interacting
         self._interacting = False
 
-        # ---- Native-resolution crop ----
         pad = int(self.crop_pad_var.get())
         current_zoom = self.zoom
         saved_pan_x, saved_pan_y = self.pan_x, self.pan_y
 
-        # Output dimensions: crop region scaled to 1 source pixel per output pixel
         out_crop_w = max(1, int(round((x1 - x0) / current_zoom)))
         out_crop_h = max(1, int(round((y1 - y0) / current_zoom)))
         out_w = out_crop_w + 2 * pad
         out_h = out_crop_h + 2 * pad
 
-        # At zoom=1: pan must place canvas-pixel x0 at output column `pad`
         self.zoom  = 1.0
         self.pan_x = (saved_pan_x - x0) / current_zoom + pad
         self.pan_y = (saved_pan_y - y0) / current_zoom + pad
@@ -1415,7 +1560,18 @@ class ImageComparer:
         v2 = self._get_view(self.images[1], off_x, off_y,
                              total_rot, out_w, out_h, idx=1).convert("RGB")
 
-        # Draw annotations while zoom=1 and pan are in export coords
+        # Scale sizes from canvas-units to native image pixels
+        zoom_inv = 1.0 / current_zoom if current_zoom > 0 else 1.0
+        pil_label_size = max(1, round(label_size * zoom_inv))
+        _leg = legend_size if legend_size is not None else self.canvas_legend_size_var.get()
+        pil_legend_size = max(1, round(_leg * zoom_inv))
+        ann_width = max(1, round(3 * zoom_inv))
+
+        try:
+            label_font = ImageFont.load_default(size=pil_label_size)
+        except TypeError:
+            label_font = ImageFont.load_default()
+
         if mode == "overlay":
             alpha = self.opacity_var.get()
             if self.images[0] and self.images[1]:
@@ -1429,9 +1585,10 @@ class ImageComparer:
                 cx, cy = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
                 r = max(2, int(round(ann["radius"] * self.zoom)))
                 drw.ellipse([cx - r, cy - r, cx + r, cy + r],
-                            outline=ann["colour"], width=2)
+                            outline=ann["colour"], width=ann_width)
                 if ann.get("label"):
-                    drw.text((cx + r + 5, cy - 8), ann["label"], fill=ann["colour"])
+                    drw.text((cx + r + 5, cy - pil_label_size // 2),
+                             ann["label"], fill=ann["colour"], font=label_font)
         else:
             gap = 4
             result = Image.new("RGB", (out_w * 2 + gap, out_h), (40, 40, 40))
@@ -1442,34 +1599,121 @@ class ImageComparer:
                 r = max(2, int(round(ann["radius"] * self.zoom)))
                 cx1, cy1 = self._img1_to_canvas1(ann["img1_x"], ann["img1_y"], glob_rot)
                 drw.ellipse([cx1 - r, cy1 - r, cx1 + r, cy1 + r],
-                            outline=ann["colour"], width=2)
+                            outline=ann["colour"], width=ann_width)
                 if ann.get("label"):
-                    drw.text((cx1 + r + 5, cy1 - 8), ann["label"], fill=ann["colour"])
+                    drw.text((cx1 + r + 5, cy1 - pil_label_size // 2),
+                             ann["label"], fill=ann["colour"], font=label_font)
                 if self.images[1] is not None:
                     cx2, cy2 = self._img2_to_canvas2(ann["img2_x"], ann["img2_y"],
                                                      off_x, off_y, total_rot)
                     drw.ellipse([out_w + gap + cx2 - r, cy2 - r,
                                  out_w + gap + cx2 + r, cy2 + r],
-                                outline=ann["colour"], width=2)
+                                outline=ann["colour"], width=ann_width)
                     if ann.get("label"):
-                        drw.text((out_w + gap + cx2 + r + 5, cy2 - 8),
-                                 ann["label"], fill=ann["colour"])
+                        drw.text((out_w + gap + cx2 + r + 5, cy2 - pil_label_size // 2),
+                                 ann["label"], fill=ann["colour"], font=label_font)
 
+        self._draw_watermark_pil(result)
+        result = self._attach_legend_sidebar(result, font_size=pil_legend_size)
         self.zoom  = current_zoom
         self.pan_x = saved_pan_x
         self.pan_y = saved_pan_y
         self._interacting = was_interacting
+        return result
 
-        path = filedialog.asksaveasfilename(
-            title="Export crop as PNG",
-            defaultextension=".png",
-            filetypes=[("PNG \u2013 lossless", "*.png"),
-                       ("TIFF \u2013 lossless", "*.tif *.tiff")]
-        )
-        if path:
-            result.save(path, compress_level=3)
-            self.status_var.set(f"Crop exported \u2192 {path}  "
-                                f"({result.width}\u00d7{result.height} px)")
+    def _show_crop_preview(self, x0, y0, x1, y1):
+        """Open a modal preview window to adjust font sizes before saving the crop."""
+        default_label_size = self.annot_label_size_var.get()
+        default_legend_size = self.canvas_legend_size_var.get()
+
+        win = tk.Toplevel(self.root)
+        win.title("Crop preview  \u2014  adjust sizes, then export")
+        win.configure(bg="#2b2b2b")
+        win.wait_visibility()
+        win.grab_set()
+
+        label_size_var = tk.IntVar(value=default_label_size)
+        legend_size_var = tk.IntVar(value=default_legend_size)
+        _photo_ref = [None]
+        _current_result = [None]
+
+        # ---- Preview image ----
+        preview_lbl = tk.Label(win, bg="#1a1a1a")
+        preview_lbl.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
+
+        def render_preview(*_):
+            result = self._render_crop_pil(
+                x0, y0, x1, y1,
+                label_size=label_size_var.get(),
+                legend_size=legend_size_var.get(),
+            )
+            _current_result[0] = result
+            max_w = max(400, min(self.root.winfo_screenwidth() - 120, 1400))
+            max_h = max(300, min(self.root.winfo_screenheight() - 280, 800))
+            scale = min(max_w / result.width, max_h / result.height, 1.0)
+            if scale < 1.0:
+                preview = result.resize(
+                    (int(result.width * scale), int(result.height * scale)),
+                    Image.LANCZOS,
+                )
+            else:
+                preview = result
+            photo = ImageTk.PhotoImage(preview)
+            preview_lbl.config(image=photo)
+            _photo_ref[0] = photo
+
+        render_preview()
+
+        # ---- Sliders ----
+        ctrl = tk.Frame(win, bg="#2b2b2b")
+        ctrl.pack(side=tk.TOP, fill=tk.X, padx=8, pady=4)
+
+        for text, var, lo, hi in [
+            ("Annotation label size (pt)", label_size_var, 6, 60),
+            ("Legend text size (pt)",      legend_size_var, 6, 60),
+        ]:
+            col = tk.Frame(ctrl, bg="#2b2b2b")
+            col.pack(side=tk.LEFT, padx=16)
+            tk.Label(col, text=text, bg="#2b2b2b", fg="#ccc",
+                     font=("TkDefaultFont", 9)).pack(anchor=tk.W)
+            tk.Scale(col, variable=var, from_=lo, to=hi,
+                     orient=tk.HORIZONTAL, length=220,
+                     bg="#2b2b2b", fg="#ccc", troughcolor="#444",
+                     highlightthickness=0,
+                     command=render_preview).pack()
+
+        # ---- Buttons ----
+        btn = tk.Frame(win, bg="#2b2b2b")
+        btn.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(2, 8))
+
+        def do_export():
+            result = _current_result[0]
+            if result is None:
+                return
+            path = filedialog.asksaveasfilename(
+                title="Export crop as PNG",
+                defaultextension=".png",
+                filetypes=[("PNG \u2013 lossless", "*.png"),
+                           ("TIFF \u2013 lossless", "*.tif *.tiff")],
+                parent=win,
+            )
+            if path:
+                result.save(path, compress_level=3)
+                self.status_var.set(f"Crop exported \u2192 {path}  "
+                                    f"({result.width}\u00d7{result.height} px)")
+                win.destroy()
+
+        tk.Button(btn, text="Export", command=do_export,
+                  bg="#336633", fg="white", relief=tk.FLAT, padx=16, pady=4,
+                  cursor="hand2",
+                  font=("TkDefaultFont", 10, "bold")).pack(side=tk.RIGHT, padx=4)
+        tk.Button(btn, text="Cancel", command=win.destroy,
+                  bg="#555", fg="white", relief=tk.FLAT, padx=12, pady=4,
+                  cursor="hand2").pack(side=tk.RIGHT, padx=4)
+
+    def _do_export_crop(self, x0, y0, x1, y1):
+        """Open the crop preview window for font size adjustment before saving."""
+        self._show_crop_preview(x0, y0, x1, y1)
 
     # ----------------------------------------------------------------- Session save/load
 
@@ -1490,6 +1734,7 @@ class ImageComparer:
                 "glob_rot": self.glob_rot_var.get(),
             },
             "annotations": self.annotations,
+            "colour_labels": self.colour_labels,
             "align_pts_img1": self._align_pts_img1,
             "align_pts_img2": self._align_pts_img2,
             "adjustments": [
@@ -1622,6 +1867,8 @@ class ImageComparer:
         # Restore annotations and alignment points
         if "annotations" in session:
             self.annotations = session["annotations"]
+        if "colour_labels" in session:
+            self.colour_labels = session["colour_labels"]
         if "align_pts_img1" in session:
             self._align_pts_img1 = [tuple(p) for p in session["align_pts_img1"]]
         if "align_pts_img2" in session:

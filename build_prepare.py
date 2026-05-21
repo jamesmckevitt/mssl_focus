@@ -7,6 +7,7 @@ Usage: python build_prepare.py <git-tag>   e.g.  python build_prepare.py v1.2.3
 Writes:
   _version.txt           -- plain version string (tag with leading 'v' stripped)
   app.ico                -- application icon (multi-size ICO via Pillow)
+  app.png                -- application icon (PNG for Linux/runtime use)
   file_version_info.txt  -- PyInstaller Windows VERSIONINFO resource
 """
 
@@ -30,39 +31,28 @@ def main():
     # ------------------------------------------------------------------ #
     from PIL import Image, ImageDraw
 
-    # Mesh grid icon
+    # Simple 3x3 black grid on a white square
     sz = 256
-    m = 14          # outer margin
-    g = 20          # grid inset from background edge
-    n = 5           # cells per side (6 lines each direction)
-    img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+    m = 18
+    img = Image.new("RGBA", (sz, sz), (255, 255, 255, 255))
     d = ImageDraw.Draw(img)
-    # Background square
-    d.rectangle([m, m, sz - m - 1, sz - m - 1],
-                fill="#1a3a5c", outline="#6ab0dc", width=3)
-    # Grid lines
-    g0 = m + g
-    g1 = sz - m - g - 1
-    for i in range(n + 1):
-        t = i / n
-        x = round(g0 + t * (g1 - g0))
-        y = round(g0 + t * (g1 - g0))
-        d.line([(x, g0), (x, g1)], fill="#4a9eff", width=3)
-        d.line([(g0, y), (g1, y)], fill="#4a9eff", width=3)
-    # Dots at intersections
-    dr = 6
-    for i in range(n + 1):
-        for j in range(n + 1):
-            cx = round(g0 + (i / n) * (g1 - g0))
-            cy = round(g0 + (j / n) * (g1 - g0))
-            d.ellipse([cx - dr, cy - dr, cx + dr, cy + dr], fill="#b0deff")
+    x0, y0 = m, m
+    x1, y1 = sz - m - 1, sz - m - 1
+    d.rectangle([x0, y0, x1, y1], fill="white", outline="black", width=8)
+    line_w = 10
+    for frac in (1 / 3, 2 / 3):
+      x = round(x0 + frac * (x1 - x0))
+      y = round(y0 + frac * (y1 - y0))
+      d.line([(x, y0), (x, y1)], fill="black", width=line_w)
+      d.line([(x0, y), (x1, y)], fill="black", width=line_w)
 
     img.save(
         "app.ico",
         format="ICO",
         sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)],
     )
-    print("Generated app.ico")
+    img.save("app.png", format="PNG")
+    print("Generated app.ico and app.png")
 
     # ------------------------------------------------------------------ #
     # file_version_info.txt  (Windows VERSIONINFO for PyInstaller)

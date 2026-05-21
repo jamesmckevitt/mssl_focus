@@ -55,7 +55,9 @@ jobs:
           --collect-all rawpy
           --collect-all cv2
           --add-data "_version.txt:."
-          --icon app.ico
+          --add-data "app.ico:."
+          --add-data "app.png:."
+          --icon app.png
           filter_inspector.py
 
       - name: Build (Windows)
@@ -70,6 +72,8 @@ jobs:
           --collect-all rawpy
           --collect-all cv2
           --add-data "_version.txt:."
+          --add-data "app.ico;."
+          --add-data "app.png;."
           --icon app.ico
           --version-file file_version_info.txt
           filter_inspector.py

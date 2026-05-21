@@ -225,9 +225,25 @@ class UIBuilderMixin:
             tk.Label(toolbar5, text="NR:", bg="#12121a", fg="#aaa",
                      font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(4, 0))
             tk.Scale(toolbar5, variable=self.nr_amount_vars[img_idx],
-                     from_=0, to=100, resolution=1, orient=tk.HORIZONTAL, length=80,
+                     from_=0, to=100, resolution=10, orient=tk.HORIZONTAL, length=70,
                      bg="#12121a", fg="#ccc", troughcolor="#444",
                      highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=2)
+            tk.Label(toolbar5, text="CNR:", bg="#12121a", fg="#7fd7ff",
+                     font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(2, 0))
+            tk.Scale(toolbar5, variable=self.nr_color_vars[img_idx],
+                     from_=0, to=100, resolution=10, orient=tk.HORIZONTAL, length=60,
+                     bg="#12121a", fg="#ccc", troughcolor="#444",
+                     highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=2)
+            tk.Label(toolbar5, text="Edge:", bg="#12121a", fg="#9fffb0",
+                     font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(2, 0))
+            tk.Scale(toolbar5, variable=self.nr_edge_vars[img_idx],
+                     from_=0, to=100, resolution=10, orient=tk.HORIZONTAL, length=60,
+                     bg="#12121a", fg="#ccc", troughcolor="#444",
+                     highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=2)
+            tk.Checkbutton(toolbar5, text="Agg", variable=self.nr_aggressive_vars[img_idx],
+                           bg="#12121a", fg="#aaccff", selectcolor="#334455",
+                           activebackground="#12121a", activeforeground="#aaccff"
+                           ).pack(side=tk.LEFT, padx=(2, 0))
             tk.Button(toolbar5, text="Apply",
                       command=lambda i=img_idx: self._apply_noise_reduction(i),
                       bg="#334455", fg="#aaccff", relief=tk.FLAT, padx=5, pady=2,

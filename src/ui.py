@@ -88,6 +88,7 @@ class UIBuilderMixin:
         file_menu.add_separator()
         file_menu.add_command(label="Save Session...", command=self._save_session)
         file_menu.add_command(label="Load Session...", command=self._load_session)
+        file_menu.add_command(label="Import Image Settings...", command=self._import_image_settings_from_session)
         file_menu.add_command(label="Import Annotations...", command=self._import_annotations_from_session)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.destroy)
@@ -455,6 +456,9 @@ class UIBuilderMixin:
 
         import_row = tk.Frame(sessions, bg="#202028")
         import_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Button(import_row, text="Import image settings", command=self._import_image_settings_from_session,
+              bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=10, pady=4,
+              cursor="hand2").pack(side=tk.LEFT, padx=4)
         tk.Button(import_row, text="Import annotations", command=self._import_annotations_from_session,
                   bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)

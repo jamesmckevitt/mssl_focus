@@ -21,6 +21,106 @@ class SessionMixin:
         normalized["label"] = ann.get("label", "")
         return normalized
 
+    def _reset_session_state(self):
+        if getattr(self, "_annotation_import", None) is not None:
+            self._cancel_annotation_import()
+        self._close_noise_reduction_progress()
+
+        self.images = [None, None]
+        self.image_paths = [None, None]
+        self.preview_images = [None, None]
+        self.preview_scales = [1.0, 1.0]
+        self.photos = [None, None]
+        self._base_images = [None, None]
+        self._rotated_cache = [None, None]
+        self._last_rot = [None, None]
+        self._rotated_preview_cache = [None, None]
+        self._last_rot_preview = [None, None]
+
+        self.zoom = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.cursor_pos = (0, 0)
+        self.last_pan = (0, 0)
+        self._interacting = False
+
+        self.annotations = []
+        self.annot_colour = "#ff0000"
+        self.colour_labels = {}
+        if getattr(self, "annot_colour_btn", None) is not None:
+            try:
+                self.annot_colour_btn.config(bg=self.annot_colour)
+            except Exception:
+                pass
+
+        self._level_start = None
+        self._crop_corner1 = None
+        self._drag_annotation_index = None
+        self._align_guide_cursor = None
+        self._clear_align_pts()
+
+        self.mode_var.set("sidebyside")
+        self.opacity_var.set(0.5)
+        self.off_x_var.set("0")
+        self.off_y_var.set("0")
+        self.rot_var.set("0.0")
+        self.img2_scale_var.set("1.000")
+        self.glob_rot_var.set("0.0")
+
+        self.level_mode_var.set(False)
+        self.annot_mode_var.set(False)
+        self.annot_radius_var.set(20)
+        self.annot_label_var.set(False)
+        self.move_annot_mode_var.set(False)
+        self.align_mode_var.set(False)
+        self.align_scale_mode_var.set(False)
+        self.crop_mode_var.set(False)
+        self.crop_pad_var.set(20)
+        self.annot_label_size_var.set(16)
+        self.canvas_legend_size_var.set(13)
+        self.annot_width_var.set(2.0)
+
+        for img_idx in range(2):
+            self.nr_amount_vars[img_idx].set(0)
+            self.nr_aggressive_vars[img_idx].set(False)
+            self.nr_color_vars[img_idx].set(50)
+            self.nr_edge_vars[img_idx].set(100)
+            self.adj_vars[img_idx]["brightness"].set(1.0)
+            self.adj_vars[img_idx]["contrast"].set(1.0)
+            self.adj_vars[img_idx]["blacks"].set(0.0)
+            self.adj_vars[img_idx]["whites"].set(255.0)
+
+        self.canvas1.delete("level_line")
+        self.canvas2.delete("level_line")
+        self.canvas1.delete("crop_preview")
+        self.canvas2.delete("crop_preview")
+        self.canvas1.delete("annotations")
+        self.canvas2.delete("annotations")
+        self.canvas1.delete("legend")
+        self.canvas2.delete("legend")
+
+        self._on_mode_change()
+        self._on_crop_mode_change()
+        self._on_annot_mode_change()
+        self._on_move_annot_mode_change()
+        self._on_level_mode_change()
+        self._schedule_render()
+        self.status_var.set("New session started. Load two images to begin.")
+
+    def _new_session(self):
+        answer = messagebox.askyesnocancel(
+            "New session",
+            "Start a new session?\n\nSave the current session first if you want to keep these images, annotations, alignments, and adjustments.",
+            parent=self.root,
+        )
+        if answer is None:
+            return
+        if answer:
+            saved_path = self._save_session()
+            if not saved_path:
+                return
+        self._reset_session_state()
+
     def _fit_similarity_transform(self, source_points, target_points):
         src = np.array(source_points, dtype=float)
         dst = np.array(target_points, dtype=float)
@@ -81,10 +181,11 @@ class SessionMixin:
             filetypes=[("Session file", "*.json"), ("All files", "*.*")],
         )
         if not path:
-            return
+            return None
         with open(path, "w", encoding="utf-8") as f:
             json.dump(session, f, indent=2)
         self.status_var.set(f"Session saved -> {path}")
+        return path
 
     def _load_session(self):
         path = filedialog.askopenfilename(

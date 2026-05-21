@@ -163,11 +163,13 @@ class ViewerMixin:
         self.status_var.set(f"Image {idx + 1} loaded: {path}  ({img.width}x{img.height})")
         self._schedule_render()
 
-    def _apply_noise_reduction(self, idx):
+    def _apply_noise_reduction(self, idx, on_complete=None):
         """Apply NLM noise reduction (OpenCV, CIELAB space) in a background thread."""
         base = self._base_images[idx]
         if base is None:
             self.status_var.set(f"Image {idx + 1}: no image loaded")
+            if on_complete is not None:
+                on_complete(False)
             return
         amount = self.nr_amount_vars[idx].get()
         color_amount = self.nr_color_vars[idx].get()
@@ -184,6 +186,8 @@ class ViewerMixin:
             self._last_rot_preview[idx] = None
             self.status_var.set(f"Image {idx + 1}: noise reduction cleared")
             self._schedule_render()
+            if on_complete is not None:
+                on_complete(True)
             return
 
         self.status_var.set(
@@ -246,6 +250,8 @@ class ViewerMixin:
             self._close_noise_reduction_progress()
             if status == "error":
                 self.status_var.set(f"Image {idx + 1}: NR failed -- {value}")
+                if on_complete is not None:
+                    on_complete(False)
                 return
             img = value
             self.images[idx] = img
@@ -259,6 +265,8 @@ class ViewerMixin:
                 f"(amount {amount}, color {color_amount}, edge {edge_amount})"
             )
             self._schedule_render()
+            if on_complete is not None:
+                on_complete(True)
 
         threading.Thread(target=_worker, daemon=True).start()
         self.root.after(50, _poll)

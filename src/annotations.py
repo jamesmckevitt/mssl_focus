@@ -7,7 +7,7 @@ from tkinter import colorchooser, messagebox, simpledialog
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageTk
 
-from .constants import _PRESET_COLOURS
+from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL, _PRESET_COLOURS
 
 
 class AnnotationMixin:
@@ -16,8 +16,8 @@ class AnnotationMixin:
             _, _, _, glob_rot = self._get_alignment_values()
         img1_x = float(ann["img1_x"])
         img1_y = float(ann["img1_y"])
-        # Annotations are stored only in Image 1 reference space.
-        # Image 2 rendering is the current projection of that reference point.
+        # Annotations are stored only in the backlit-image reference space.
+        # Frontlit-image rendering is the current projection of that reference point.
         return self._img1_to_canvas1(img1_x, img1_y, glob_rot)
 
     def _draw_align_guide(self):
@@ -187,10 +187,10 @@ class AnnotationMixin:
         self._set_menu_entry_state(getattr(self, "_align_apply_menu_ref", None), align_state)
         self._set_menu_entry_state(getattr(self, "_align_scale_apply_menu_ref", None), align_scale_state)
         if self.align_mode_var.get() or self.align_scale_mode_var.get():
-            next_target = "Image 1" if self._expected_align_canvas() == 0 else "Image 2"
+            next_target = BACKLIT_IMAGE_LABEL if self._expected_align_canvas() == 0 else FRONTLIT_IMAGE_LABEL
             mode_label = "Point align + scale" if self.align_scale_mode_var.get() else "Point align"
             self.status_var.set(
-                f"{mode_label}  -  Image 1: {n1} pt(s)  |  Image 2: {n2} pt(s)  |  "
+                f"{mode_label}  -  {BACKLIT_IMAGE_LABEL}: {n1} pt(s)  |  {FRONTLIT_IMAGE_LABEL}: {n2} pt(s)  |  "
                 f"{'Ready  -  click Apply' if can_apply else 'Next click: ' + next_target}"
             )
 
@@ -198,7 +198,7 @@ class AnnotationMixin:
         canvas_is_2 = (event.widget == self.canvas2)
         expected_canvas = self._expected_align_canvas()
         if int(canvas_is_2) != expected_canvas:
-            expected_name = "Image 2" if expected_canvas else "Image 1"
+            expected_name = FRONTLIT_IMAGE_LABEL if expected_canvas else BACKLIT_IMAGE_LABEL
             self.status_var.set(f"Point align  -  next click should be on {expected_name}.")
             return
         if canvas_is_2:

@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox
 import numpy as np
 from PIL import Image
 
+from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL
 from .viewer import _open_image
 
 
@@ -105,7 +106,7 @@ class SessionMixin:
         self._on_move_annot_mode_change()
         self._on_level_mode_change()
         self._schedule_render()
-        self.status_var.set("New session started. Load two images to begin.")
+        self.status_var.set(f"New session started. Load {BACKLIT_IMAGE_LABEL.lower()} and {FRONTLIT_IMAGE_LABEL.lower()} to begin.")
 
     def _apply_adjustments_from_session(self, session):
         for i, d in enumerate(session.get("adjustments", [{}, {}])[:2]):
@@ -310,7 +311,7 @@ class SessionMixin:
                  bg="#2b2b2b", fg="#ccc",
                  font=("TkDefaultFont", 9, "bold")).pack(padx=12, pady=(10, 4), anchor=tk.W)
 
-        for i, (pv, label) in enumerate(zip(path_vars, ["Image 1:", "Image 2:"])):
+        for i, (pv, label) in enumerate(zip(path_vars, [f"{BACKLIT_IMAGE_LABEL}:", f"{FRONTLIT_IMAGE_LABEL}:"])):
             row = tk.Frame(dlg, bg="#2b2b2b")
             row.pack(fill=tk.X, padx=10, pady=3)
             tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa",
@@ -373,7 +374,7 @@ class SessionMixin:
                     self._last_rot_preview[i] = None
                 except Exception as exc:
                     messagebox.showerror("Load error",
-                                         f"Could not load image {i + 1}:\n{loaded_path}\n\n{exc}",
+                                         f"Could not load {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}:\n{loaded_path}\n\n{exc}",
                                          parent=self.root)
 
         alignment = session.get("alignment", {})
@@ -505,12 +506,12 @@ class SessionMixin:
         self._set_widget_states_by_text(
             viewer.root,
             {
-                "Load Image 1",
-                "Load Image 2",
+                f"Load {BACKLIT_IMAGE_LABEL}",
+                f"Load {FRONTLIT_IMAGE_LABEL}",
                 " Annotate  (click=place  | right-click=delete)",
                 "Clear all",
                 "Edit labels",
-                " Point align  (click pts on img 1, then same pts on img 2  | 2 pairs needed)",
+                " Point align  (click pts on backlit image, then same pts on frontlit image  | 2 pairs needed)",
                 " Point align + scale  (final click free; 2 pairs needed)",
                 "Apply align",
                 "Apply align+scale",
@@ -539,11 +540,11 @@ class SessionMixin:
         help_var = tk.StringVar(
             value=(
                 "Click an old annotation in this window, then click the matching point in the main window. "
-                "Only Image 1 needs matching; Image 2 is shown for reference."
+                f"Only {BACKLIT_IMAGE_LABEL} needs matching; {FRONTLIT_IMAGE_LABEL} is shown for reference."
             )
         )
-        count_vars = [tk.StringVar(value="Image 1: 0 pair(s)"),
-                      tk.StringVar(value="Image 2: reference only")]
+        count_vars = [tk.StringVar(value=f"{BACKLIT_IMAGE_LABEL}: 0 pair(s)"),
+                      tk.StringVar(value=f"{FRONTLIT_IMAGE_LABEL}: reference only")]
         tk.Label(controls, textvariable=help_var, bg="#1b2030", fg="#ddd",
                  justify=tk.LEFT, wraplength=850,
                  font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=8)
@@ -580,7 +581,7 @@ class SessionMixin:
         if self.images[0] is None or self.images[1] is None:
             messagebox.showinfo(
                 "Import annotations",
-                "Load the current Image 1 and Image 2 first, then import annotations.",
+                f"Load the current {BACKLIT_IMAGE_LABEL} and {FRONTLIT_IMAGE_LABEL} first, then import annotations.",
                 parent=self.root,
             )
             return
@@ -593,7 +594,7 @@ class SessionMixin:
 
         confirmed = messagebox.askyesno(
             "Import annotations",
-            "Have you already aligned the current Image 1 and Image 2?\n\n"
+            f"Have you already aligned the current {BACKLIT_IMAGE_LABEL} and {FRONTLIT_IMAGE_LABEL}?\n\n"
             "Imported annotations assume the current pair is already aligned before import.",
             parent=self.root,
         )
@@ -647,7 +648,7 @@ class SessionMixin:
             font=("TkDefaultFont", 9, "bold"),
         ).pack(padx=12, pady=(10, 4), anchor=tk.W)
 
-        for pv, label in zip(path_vars, ["Source Image 1:", "Source Image 2:"]):
+        for pv, label in zip(path_vars, [f"Source {BACKLIT_IMAGE_LABEL}:", f"Source {FRONTLIT_IMAGE_LABEL}:"]):
             row = tk.Frame(dlg, bg="#2b2b2b")
             row.pack(fill=tk.X, padx=10, pady=3)
             tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa",
@@ -699,7 +700,7 @@ class SessionMixin:
             if not source_path:
                 messagebox.showerror(
                     "Import annotations",
-                    f"Please choose the source file for Image {i + 1}.",
+                    f"Please choose the source file for {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}.",
                     parent=self.root,
                 )
                 return
@@ -711,7 +712,7 @@ class SessionMixin:
             except Exception as exc:
                 messagebox.showerror(
                     "Import annotations",
-                    f"Could not load source image {i + 1}:\n{source_path}\n\n{exc}",
+                    f"Could not load source {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}:\n{source_path}\n\n{exc}",
                     parent=self.root,
                 )
                 return
@@ -799,18 +800,18 @@ class SessionMixin:
         state = self._annotation_import
         if state is None:
             return
-        state["count_vars"][0].set(f"Image 1: {len(state['source_pairs'][0])} pair(s)")
-        state["count_vars"][1].set("Image 2: reference only")
+        state["count_vars"][0].set(f"{BACKLIT_IMAGE_LABEL}: {len(state['source_pairs'][0])} pair(s)")
+        state["count_vars"][1].set(f"{FRONTLIT_IMAGE_LABEL}: reference only")
         pending = state["pending"]
         if pending is None:
             state["help_var"].set(
-                "Click an old annotation in the source-session window on Image 1, then click the matching point on the current Image 1. "
-                "Do this at least twice. Image 2 is shown for reference only."
+                f"Click an old annotation in the source-session window on {BACKLIT_IMAGE_LABEL}, then click the matching point on the current {BACKLIT_IMAGE_LABEL}. "
+                f"Do this at least twice. {FRONTLIT_IMAGE_LABEL} is shown for reference only."
             )
         else:
             state["help_var"].set(
-                f"Selected source annotation {pending['ann_index'] + 1} on Image 1. "
-                "Now click the matching point on the current Image 1."
+                f"Selected source annotation {pending['ann_index'] + 1} on {BACKLIT_IMAGE_LABEL}. "
+                f"Now click the matching point on the current {BACKLIT_IMAGE_LABEL}."
             )
         can_apply = len(state["source_pairs"][0]) >= 2
         state["apply_btn"].config(state=tk.NORMAL if can_apply else tk.DISABLED)
@@ -868,7 +869,7 @@ class SessionMixin:
             return
         if image_idx != 0:
             self.status_var.set(
-                "Import annotations: only source Image 1 is used for matching. Image 2 is for reference."
+                f"Import annotations: only source {BACKLIT_IMAGE_LABEL} is used for matching. {FRONTLIT_IMAGE_LABEL} is for reference."
             )
             return
         if state["pending"] is not None:
@@ -896,12 +897,12 @@ class SessionMixin:
                 closest = ann_index
         if closest is None or min_dist > 30:
             self.status_var.set(
-                "Import annotations: click closer to a source annotation on Image 1."
+                f"Import annotations: click closer to a source annotation on {BACKLIT_IMAGE_LABEL}."
             )
             return
         if closest in state["matched_ann_indices"][0]:
             self.status_var.set(
-                f"Import annotations: source annotation {closest + 1} on Image 1 is already used."
+                f"Import annotations: source annotation {closest + 1} on {BACKLIT_IMAGE_LABEL} is already used."
             )
             return
 
@@ -912,8 +913,8 @@ class SessionMixin:
             "point": (float(ann["img1_x"]), float(ann["img1_y"])),
         }
         self.status_var.set(
-            f"Import annotations: selected source annotation {closest + 1} on Image 1; "
-            "click the matching point on the current Image 1."
+            f"Import annotations: selected source annotation {closest + 1} on {BACKLIT_IMAGE_LABEL}; "
+            f"click the matching point on the current {BACKLIT_IMAGE_LABEL}."
         )
         self._update_annotation_import_ui()
 
@@ -930,7 +931,7 @@ class SessionMixin:
 
         if event.widget != self.canvas1:
             self.status_var.set(
-                "Import annotations: place the matching point on current Image 1 only."
+                f"Import annotations: place the matching point on the current {BACKLIT_IMAGE_LABEL} only."
             )
             return
         image_idx = 0
@@ -938,7 +939,7 @@ class SessionMixin:
 
         if image_idx != pending["image_idx"]:
             self.status_var.set(
-                f"Import annotations: the next target click must be on current Image {pending['image_idx'] + 1}."
+                f"Import annotations: the next target click must be on the current {BACKLIT_IMAGE_LABEL if pending['image_idx'] == 0 else FRONTLIT_IMAGE_LABEL}."
             )
             return
 
@@ -947,7 +948,7 @@ class SessionMixin:
         state["matched_ann_indices"][0].append(pending["ann_index"])
         state["pending"] = None
         self.status_var.set(
-            f"Import annotations: stored pair {len(state['source_pairs'][0])} for Image 1."
+            f"Import annotations: stored pair {len(state['source_pairs'][0])} for {BACKLIT_IMAGE_LABEL}."
         )
         self._update_annotation_import_ui()
 

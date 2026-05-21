@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
 
+from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL
+
 
 class UIBuilderMixin:
     def _build_ui(self):
@@ -43,10 +45,10 @@ class UIBuilderMixin:
         self.canvas1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.canvas1.create_text(8, 8, anchor=tk.NW, text="IMAGE 1",
+        self.canvas1.create_text(8, 8, anchor=tk.NW, text=BACKLIT_IMAGE_LABEL,
                                  fill="#ffcc00", font=("TkDefaultFont", 9, "bold"),
                                  tags="badge1")
-        self.canvas2.create_text(8, 8, anchor=tk.NW, text="IMAGE 2",
+        self.canvas2.create_text(8, 8, anchor=tk.NW, text=FRONTLIT_IMAGE_LABEL,
                                  fill="#00ccff", font=("TkDefaultFont", 9, "bold"),
                                  tags="badge2")
 
@@ -83,8 +85,8 @@ class UIBuilderMixin:
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="New Session...", command=self._new_session)
         file_menu.add_separator()
-        file_menu.add_command(label="Load Image 1...", command=lambda: self.load_image(0))
-        file_menu.add_command(label="Load Image 2...", command=lambda: self.load_image(1))
+        file_menu.add_command(label=f"Load {BACKLIT_IMAGE_LABEL}...", command=lambda: self.load_image(0))
+        file_menu.add_command(label=f"Load {FRONTLIT_IMAGE_LABEL}...", command=lambda: self.load_image(1))
         file_menu.add_separator()
         file_menu.add_command(label="Save Session...", command=self._save_session)
         file_menu.add_command(label="Load Session...", command=self._load_session)
@@ -143,22 +145,22 @@ class UIBuilderMixin:
         menubar.add_cascade(label="Annotations", menu=annot_menu)
 
         image1_menu = tk.Menu(menubar, tearoff=False)
-        image1_menu.add_command(label="Show Image 1 Controls", command=lambda: self._show_control_panel("image1"))
-        image1_menu.add_command(label="Load Image 1...", command=lambda: self.load_image(0))
+        image1_menu.add_command(label=f"Show {BACKLIT_IMAGE_LABEL} Controls", command=lambda: self._show_control_panel("image1"))
+        image1_menu.add_command(label=f"Load {BACKLIT_IMAGE_LABEL}...", command=lambda: self.load_image(0))
         image1_menu.add_separator()
         image1_menu.add_command(label="Apply Noise Reduction", command=lambda: self._apply_noise_reduction(0))
         image1_menu.add_command(label="Clear Noise Reduction", command=lambda: self._clear_noise_reduction(0))
-        image1_menu.add_command(label="Reset Image 1 Adjustments", command=lambda: self._reset_image_adjustments(0))
-        menubar.add_cascade(label="Image 1", menu=image1_menu)
+        image1_menu.add_command(label=f"Reset {BACKLIT_IMAGE_LABEL} Adjustments", command=lambda: self._reset_image_adjustments(0))
+        menubar.add_cascade(label=BACKLIT_IMAGE_LABEL, menu=image1_menu)
 
         image2_menu = tk.Menu(menubar, tearoff=False)
-        image2_menu.add_command(label="Show Image 2 Controls", command=lambda: self._show_control_panel("image2"))
-        image2_menu.add_command(label="Load Image 2...", command=lambda: self.load_image(1))
+        image2_menu.add_command(label=f"Show {FRONTLIT_IMAGE_LABEL} Controls", command=lambda: self._show_control_panel("image2"))
+        image2_menu.add_command(label=f"Load {FRONTLIT_IMAGE_LABEL}...", command=lambda: self.load_image(1))
         image2_menu.add_separator()
         image2_menu.add_command(label="Apply Noise Reduction", command=lambda: self._apply_noise_reduction(1))
         image2_menu.add_command(label="Clear Noise Reduction", command=lambda: self._clear_noise_reduction(1))
-        image2_menu.add_command(label="Reset Image 2 Adjustments", command=lambda: self._reset_image_adjustments(1))
-        menubar.add_cascade(label="Image 2", menu=image2_menu)
+        image2_menu.add_command(label=f"Reset {FRONTLIT_IMAGE_LABEL} Adjustments", command=lambda: self._reset_image_adjustments(1))
+        menubar.add_cascade(label=FRONTLIT_IMAGE_LABEL, menu=image2_menu)
 
         export_menu = tk.Menu(menubar, tearoff=False)
         export_menu.add_command(label="Show Export / Session Controls", command=lambda: self._show_control_panel("session"))
@@ -193,8 +195,8 @@ class UIBuilderMixin:
             "view": self._create_control_tab(notebook, "View"),
             "alignment": self._create_control_tab(notebook, "Alignment"),
             "annotations": self._create_control_tab(notebook, "Annotations"),
-            "image1": self._create_control_tab(notebook, "Image 1"),
-            "image2": self._create_control_tab(notebook, "Image 2"),
+            "image1": self._create_control_tab(notebook, BACKLIT_IMAGE_LABEL),
+            "image2": self._create_control_tab(notebook, FRONTLIT_IMAGE_LABEL),
             "session": self._create_control_tab(notebook, "Session / Export"),
         }
 
@@ -218,10 +220,10 @@ class UIBuilderMixin:
 
     def _populate_view_tab(self, parent):
         files = self._make_control_section(parent, "Images")
-        tk.Button(files, text="Load Image 1", command=lambda: self.load_image(0),
+        tk.Button(files, text=f"Load {BACKLIT_IMAGE_LABEL}", command=lambda: self.load_image(0),
                   bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
-        tk.Button(files, text="Load Image 2", command=lambda: self.load_image(1),
+        tk.Button(files, text=f"Load {FRONTLIT_IMAGE_LABEL}", command=lambda: self.load_image(1),
                   bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
 
@@ -240,14 +242,14 @@ class UIBuilderMixin:
 
         opacity_row = tk.Frame(display, bg="#202028")
         opacity_row.pack(fill=tk.X, pady=6)
-        tk.Label(opacity_row, text="Overlay opacity (Image 2):",
+        tk.Label(opacity_row, text=f"Overlay opacity ({FRONTLIT_IMAGE_LABEL}):",
                  bg="#202028", fg="#dddddd").pack(side=tk.LEFT)
         ttk.Scale(opacity_row, from_=0.0, to=1.0, length=220,
                   orient=tk.HORIZONTAL, variable=self.opacity_var,
                   command=lambda _v: self._schedule_render()).pack(side=tk.LEFT, padx=8)
 
     def _populate_alignment_tab(self, parent):
-        align = self._make_control_section(parent, "Image 2 Alignment")
+        align = self._make_control_section(parent, f"{FRONTLIT_IMAGE_LABEL} Alignment")
         row1 = tk.Frame(align, bg="#202028")
         row1.pack(fill=tk.X, pady=2)
         tk.Label(row1, text="Offset X:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT)

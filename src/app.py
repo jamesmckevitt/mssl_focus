@@ -53,6 +53,8 @@ class ImageComparer(CropMixin, SessionMixin, AnnotationMixin, ViewerMixin, UIBui
         self._align_pts_img2 = []
         self._align_guide_cursor = None
         self._crop_corner1 = None
+        self._annotation_import = None
+        self._drag_annotation_index = None
 
         self.annot_label_size_var = tk.IntVar(value=16)
         self.canvas_legend_size_var = tk.IntVar(value=13)

@@ -62,10 +62,13 @@ class CropMixin:
             self.canvas1.delete("crop_preview")
             self.canvas2.delete("crop_preview")
         active = (self.crop_mode_var.get() or self.level_mode_var.get()
-                  or self.annot_mode_var.get() or self.align_mode_var.get())
+                  or self.annot_mode_var.get() or self.align_mode_var.get()
+                  or self.align_scale_mode_var.get() or self.compare_row_align_mode_var.get()
+                  or self.compare_row_align_scale_mode_var.get() or self.row_align_mode_var.get()
+                  or self.row_align_scale_mode_var.get())
         cur = "tcross" if active else "crosshair"
-        self.canvas1.config(cursor=cur)
-        self.canvas2.config(cursor=cur)
+        for canvas in self._iter_all_canvases():
+            canvas.config(cursor=cur)
 
     def _draw_crop_preview(self, cursor_x, cursor_y):
         x0, y0 = self._crop_corner1

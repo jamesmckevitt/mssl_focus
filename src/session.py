@@ -32,11 +32,21 @@ class SessionMixin:
         self.preview_images = [None, None]
         self.preview_scales = [1.0, 1.0]
         self.photos = [None, None]
+        self.compare_row_images = [None, None]
+        self.compare_row_image_paths = [None, None]
+        self.compare_row_preview_images = [None, None]
+        self.compare_row_preview_scales = [1.0, 1.0]
+        self.compare_row_photos = [None, None]
         self._base_images = [None, None]
+        self._compare_row_base_images = [None, None]
         self._rotated_cache = [None, None]
         self._last_rot = [None, None]
         self._rotated_preview_cache = [None, None]
         self._last_rot_preview = [None, None]
+        self._compare_row_rotated_cache = [None, None]
+        self._compare_row_last_rot = [None, None]
+        self._compare_row_rotated_preview_cache = [None, None]
+        self._compare_row_last_rot_preview = [None, None]
 
         self.zoom = 1.0
         self.pan_x = 0.0
@@ -58,7 +68,10 @@ class SessionMixin:
         self._crop_corner1 = None
         self._drag_annotation_index = None
         self._align_guide_cursor = None
+        self._compare_row_align_guide_cursor = None
         self._clear_align_pts()
+        self._clear_compare_row_align_pts()
+        self._clear_row_align_pts()
 
         self.mode_var.set("sidebyside")
         self.opacity_var.set(0.5)
@@ -67,6 +80,16 @@ class SessionMixin:
         self.rot_var.set("0.0")
         self.img2_scale_var.set("1.000")
         self.glob_rot_var.set("0.0")
+        self.show_compare_row_var.set(False)
+        self.compare_row_off_x_var.set("0")
+        self.compare_row_off_y_var.set("0")
+        self.compare_row_rot_var.set("0.0")
+        self.compare_row_img2_scale_var.set("1.000")
+        self.compare_row_glob_rot_var.set("0.0")
+        self.compare_row_shift_x_var.set("0")
+        self.compare_row_shift_y_var.set("0")
+        self.compare_row_shift_rot_var.set("0.0")
+        self.compare_row_shift_scale_var.set("1.000")
 
         self.level_mode_var.set(False)
         self.annot_mode_var.set(False)
@@ -75,6 +98,10 @@ class SessionMixin:
         self.move_annot_mode_var.set(False)
         self.align_mode_var.set(False)
         self.align_scale_mode_var.set(False)
+        self.compare_row_align_mode_var.set(False)
+        self.compare_row_align_scale_mode_var.set(False)
+        self.row_align_mode_var.set(False)
+        self.row_align_scale_mode_var.set(False)
         self.crop_mode_var.set(False)
         self.crop_pad_var.set(20)
         self.annot_label_size_var.set(16)
@@ -90,6 +117,14 @@ class SessionMixin:
             self.adj_vars[img_idx]["contrast"].set(1.0)
             self.adj_vars[img_idx]["blacks"].set(0.0)
             self.adj_vars[img_idx]["whites"].set(255.0)
+            self.compare_row_nr_amount_vars[img_idx].set(0)
+            self.compare_row_nr_aggressive_vars[img_idx].set(False)
+            self.compare_row_nr_color_vars[img_idx].set(50)
+            self.compare_row_nr_edge_vars[img_idx].set(100)
+            self.compare_row_adj_vars[img_idx]["brightness"].set(1.0)
+            self.compare_row_adj_vars[img_idx]["contrast"].set(1.0)
+            self.compare_row_adj_vars[img_idx]["blacks"].set(0.0)
+            self.compare_row_adj_vars[img_idx]["whites"].set(255.0)
 
         self.canvas1.delete("level_line")
         self.canvas2.delete("level_line")
@@ -99,8 +134,16 @@ class SessionMixin:
         self.canvas2.delete("annotations")
         self.canvas1.delete("legend")
         self.canvas2.delete("legend")
+        self.canvas3.delete("compare_align_pts")
+        self.canvas4.delete("compare_align_pts")
+        self.canvas4.delete("compare_align_guide")
+        self.canvas1.delete("row_align_pts")
+        self.canvas3.delete("row_align_pts")
+        self.canvas3.delete("img")
+        self.canvas4.delete("img")
 
         self._on_mode_change()
+        self._on_compare_row_toggle()
         self._on_crop_mode_change()
         self._on_annot_mode_change()
         self._on_move_annot_mode_change()
@@ -108,30 +151,301 @@ class SessionMixin:
         self._schedule_render()
         self.status_var.set(f"New session started. Load {BACKLIT_IMAGE_LABEL.lower()} and {FRONTLIT_IMAGE_LABEL.lower()} to begin.")
 
-    def _apply_adjustments_from_session(self, session):
+    def _apply_adjustments_from_session(self, session, target_adj_vars=None):
+        if target_adj_vars is None:
+            target_adj_vars = self.adj_vars
         for i, d in enumerate(session.get("adjustments", [{}, {}])[:2]):
             for key in ("brightness", "contrast", "blacks", "whites"):
                 if key in d:
-                    self.adj_vars[i][key].set(float(d[key]))
+                    target_adj_vars[i][key].set(float(d[key]))
 
-    def _load_noise_reduction_settings_from_session(self, target, session):
+    def _open_session_file(self, title, error_title):
+        path = filedialog.askopenfilename(
+            title=title,
+            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return None, None
+        try:
+            with open(path, encoding="utf-8") as f:
+                session = json.load(f)
+        except Exception as exc:
+            messagebox.showerror(
+                error_title,
+                f"Could not read session file:\n{exc}",
+                parent=self.root,
+            )
+            return None, None
+        return path, session
+
+    def _prompt_for_session_row_paths(self, title, heading, saved_paths, labels):
+        paths = list(saved_paths[:2])
+        while len(paths) < 2:
+            paths.append(None)
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.configure(bg="#2b2b2b")
+        dlg.resizable(True, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        path_vars = [tk.StringVar(value=p or "") for p in paths[:2]]
+        tk.Label(
+            dlg,
+            text=heading,
+            bg="#2b2b2b",
+            fg="#ccc",
+            font=("TkDefaultFont", 9, "bold"),
+        ).pack(padx=12, pady=(10, 4), anchor=tk.W)
+
+        for pv, label in zip(path_vars, labels):
+            row = tk.Frame(dlg, bg="#2b2b2b")
+            row.pack(fill=tk.X, padx=10, pady=3)
+            tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa", width=23, anchor=tk.W).pack(side=tk.LEFT)
+            tk.Entry(
+                row,
+                textvariable=pv,
+                bg="#444",
+                fg="white",
+                insertbackground="white",
+                relief=tk.FLAT,
+                width=60,
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+            def browse(var=pv):
+                selected = filedialog.askopenfilename(
+                    filetypes=[
+                        ("Image files",
+                         "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
+                         "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
+                         "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
+                         "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
+                        ("All files", "*.*"),
+                    ]
+                )
+                if selected:
+                    var.set(selected)
+
+            tk.Button(
+                row,
+                text="Browse...",
+                command=browse,
+                bg="#555",
+                fg="white",
+                relief=tk.FLAT,
+                padx=6,
+                pady=2,
+                cursor="hand2",
+            ).pack(side=tk.LEFT, padx=4)
+
+        confirmed = [False]
+
+        def on_ok():
+            confirmed[0] = True
+            dlg.destroy()
+
+        btn_row = tk.Frame(dlg, bg="#2b2b2b")
+        btn_row.pack(pady=10)
+        tk.Button(
+            btn_row,
+            text="Load",
+            command=on_ok,
+            bg="#336633",
+            fg="white",
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=6)
+        tk.Button(
+            btn_row,
+            text="Cancel",
+            command=dlg.destroy,
+            bg="#555",
+            fg="white",
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=6)
+
+        self.root.wait_window(dlg)
+        if not confirmed[0]:
+            return None
+        return [pv.get().strip() or None for pv in path_vars]
+
+    def _clear_loaded_row_images(self, row="top"):
+        state = self._get_image_state(row)
+        state["images"][:] = [None, None]
+        state["image_paths"][:] = [None, None]
+        state["preview_images"][:] = [None, None]
+        state["preview_scales"][:] = [1.0, 1.0]
+        state["photos"][:] = [None, None]
+        state["base_images"][:] = [None, None]
+        state["rotated_cache"][:] = [None, None]
+        state["last_rot"][:] = [None, None]
+        state["rotated_preview_cache"][:] = [None, None]
+        state["last_rot_preview"][:] = [None, None]
+
+    def _load_images_into_row(self, image_paths, row="top", error_title="Load session"):
+        self._clear_loaded_row_images(row)
+        state = self._get_image_state(row)
+        final_paths = list(image_paths[:2])
+        while len(final_paths) < 2:
+            final_paths.append(None)
+        for i, loaded_path in enumerate(final_paths):
+            if not loaded_path:
+                continue
+            try:
+                img = _open_image(loaded_path)
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                state["images"][i] = img
+                state["base_images"][i] = img
+                state["image_paths"][i] = loaded_path
+                state["preview_images"][i], state["preview_scales"][i] = self._make_preview(img)
+            except Exception as exc:
+                messagebox.showerror(
+                    error_title,
+                    f"Could not load {self._image_label(i, row)}:\n{loaded_path}\n\n{exc}",
+                    parent=self.root,
+                )
+                return False
+        return True
+
+    def _reset_compare_row_transform(self):
+        self.compare_row_shift_x_var.set("0")
+        self.compare_row_shift_y_var.set("0")
+        self.compare_row_shift_rot_var.set("0.0")
+        self.compare_row_shift_scale_var.set("1.000")
+        self._clear_row_align_pts()
+
+    def _load_top_row_from_session(self):
+        path, session = self._open_session_file("Load top row from session", "Load top row from session")
+        if not path:
+            return
+
+        final_paths = self._prompt_for_session_row_paths(
+            "Load Top Row From Session",
+            "Top-row image files to load  (edit or Browse to choose different files):",
+            list(session.get("image_paths", [None, None])),
+            [f"{BACKLIT_IMAGE_LABEL}:", f"{FRONTLIT_IMAGE_LABEL}:"]
+        )
+        if final_paths is None:
+            return
+        if not self._load_images_into_row(final_paths, row="top", error_title="Load top row from session"):
+            return
+
+        alignment = session.get("alignment", {})
+        self.off_x_var.set(str(alignment.get("off_x", "0")))
+        self.off_y_var.set(str(alignment.get("off_y", "0")))
+        self.rot_var.set(str(alignment.get("rot", "0.0")))
+        self.img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
+        self.glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
+
+        if "mode" in session:
+            self.mode_var.set(session["mode"])
+            self._on_mode_change()
+        if "opacity" in session:
+            self.opacity_var.set(float(session["opacity"]))
+        if "zoom" in session:
+            self.zoom = float(session["zoom"])
+        if "pan_x" in session:
+            self.pan_x = float(session["pan_x"])
+        if "pan_y" in session:
+            self.pan_y = float(session["pan_y"])
+        self.annotations = [self._normalize_annotation_record(ann) for ann in session.get("annotations", [])]
+        self.colour_labels = dict(session.get("colour_labels", {}))
+        self._align_pts_img1 = [tuple(p) for p in session.get("align_pts_img1", [])]
+        self._align_pts_img2 = [tuple(p) for p in session.get("align_pts_img2", [])]
+        self._apply_adjustments_from_session(session)
+
+        def finish_load(applied_nr):
+            self._schedule_render()
+            if applied_nr:
+                self.status_var.set(f"Loaded top row from session {path} and applied saved image settings.")
+            else:
+                self.status_var.set(f"Loaded top row from session {path}.")
+
+        self._apply_saved_noise_reduction_from_session(self, session, row="top", on_complete=finish_load)
+
+    def _load_compare_row_from_session(self):
+        path, session = self._open_session_file("Load bottom row from session", "Load bottom row from session")
+        if not path:
+            return
+        saved_paths = list(session.get("compare_image_paths") or session.get("image_paths", [None, None]))
+        final_paths = self._prompt_for_session_row_paths(
+            "Load Bottom Row From Session",
+            "Bottom-row image files to load  (edit or Browse to choose different files):",
+            saved_paths,
+            [f"{BACKLIT_IMAGE_LABEL}:", f"{FRONTLIT_IMAGE_LABEL}:"]
+        )
+        if final_paths is None:
+            return
+        if not self._load_images_into_row(final_paths, row="compare", error_title="Load bottom row from session"):
+            return
+
+        alignment = session.get("compare_alignment") or session.get("alignment", {})
+        self.compare_row_off_x_var.set(str(alignment.get("off_x", "0")))
+        self.compare_row_off_y_var.set(str(alignment.get("off_y", "0")))
+        self.compare_row_rot_var.set(str(alignment.get("rot", "0.0")))
+        self.compare_row_img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
+        self.compare_row_glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
+        self._reset_compare_row_transform()
+
+        compare_adjustments = {"adjustments": session.get("compare_adjustments", session.get("adjustments", [{}, {}]))}
+        self._apply_adjustments_from_session(compare_adjustments, target_adj_vars=self.compare_row_adj_vars)
+
+        self.show_compare_row_var.set(True)
+        self._on_compare_row_toggle()
+
+        def finish_load(applied_nr):
+            self._schedule_render()
+            if applied_nr:
+                self.status_var.set(
+                    f"Loaded bottom row from session {path} and applied saved image settings. "
+                    "Row-to-row alignment was reset so you can align this session against the top row."
+                )
+            else:
+                self.status_var.set(
+                    f"Loaded bottom row from session {path}. "
+                    "Row-to-row alignment was reset so you can align this session against the top row."
+                )
+
+        self._apply_saved_noise_reduction_from_session(self, session, row="compare", on_complete=finish_load)
+
+    def _load_noise_reduction_settings_from_session(self, target, session, row="top"):
         defaults = [
             {"amount": 0, "aggressive": False, "color": 50, "edge": 100},
             {"amount": 0, "aggressive": False, "color": 50, "edge": 100},
         ]
-        saved = session.get("noise_reduction", defaults)
+        if row == "compare":
+            saved = session.get("compare_noise_reduction", session.get("noise_reduction", defaults))
+            amount_vars = target.compare_row_nr_amount_vars
+            aggressive_vars = target.compare_row_nr_aggressive_vars
+            color_vars = target.compare_row_nr_color_vars
+            edge_vars = target.compare_row_nr_edge_vars
+        else:
+            saved = session.get("noise_reduction", defaults)
+            amount_vars = target.nr_amount_vars
+            aggressive_vars = target.nr_aggressive_vars
+            color_vars = target.nr_color_vars
+            edge_vars = target.nr_edge_vars
         for idx in range(2):
             cfg = saved[idx] if idx < len(saved) else defaults[idx]
-            target.nr_amount_vars[idx].set(int(cfg.get("amount", defaults[idx]["amount"])))
-            target.nr_aggressive_vars[idx].set(bool(cfg.get("aggressive", defaults[idx]["aggressive"])))
-            target.nr_color_vars[idx].set(int(cfg.get("color", defaults[idx]["color"])))
-            target.nr_edge_vars[idx].set(int(cfg.get("edge", defaults[idx]["edge"])))
+            amount_vars[idx].set(int(cfg.get("amount", defaults[idx]["amount"])))
+            aggressive_vars[idx].set(bool(cfg.get("aggressive", defaults[idx]["aggressive"])))
+            color_vars[idx].set(int(cfg.get("color", defaults[idx]["color"])))
+            edge_vars[idx].set(int(cfg.get("edge", defaults[idx]["edge"])))
 
-    def _apply_saved_noise_reduction_from_session(self, target, session, on_complete=None):
-        self._load_noise_reduction_settings_from_session(target, session)
+    def _apply_saved_noise_reduction_from_session(self, target, session, row="top", on_complete=None):
+        self._load_noise_reduction_settings_from_session(target, session, row=row)
+        image_list = target.compare_row_images if row == "compare" else target.images
+        amount_vars = target.compare_row_nr_amount_vars if row == "compare" else target.nr_amount_vars
         indices = []
         for idx in range(2):
-            if target.images[idx] is not None and target.nr_amount_vars[idx].get() > 0:
+            if image_list[idx] is not None and amount_vars[idx].get() > 0:
                 indices.append(idx)
 
         if not indices:
@@ -154,7 +468,7 @@ class SessionMixin:
                     state["all_succeeded"] = False
                 apply_next(pos + 1)
 
-            target._apply_noise_reduction(idx, on_complete=step_done)
+            target._apply_noise_reduction(idx, row=row, on_complete=step_done)
 
         target.root.after(0, apply_next)
 
@@ -267,6 +581,33 @@ class SessionMixin:
                 }
                 for i in range(2)
             ],
+            "compare_row_enabled": bool(self.show_compare_row_var.get()),
+            "compare_image_paths": self.compare_row_image_paths,
+            "compare_alignment": {
+                "off_x": self.compare_row_off_x_var.get(),
+                "off_y": self.compare_row_off_y_var.get(),
+                "rot": self.compare_row_rot_var.get(),
+                "img2_scale": self.compare_row_img2_scale_var.get(),
+                "glob_rot": self.compare_row_glob_rot_var.get(),
+            },
+            "compare_row_transform": {
+                "off_x": self.compare_row_shift_x_var.get(),
+                "off_y": self.compare_row_shift_y_var.get(),
+                "rot": self.compare_row_shift_rot_var.get(),
+                "scale": self.compare_row_shift_scale_var.get(),
+            },
+            "compare_adjustments": [
+                {k: v.get() for k, v in d.items()} for d in self.compare_row_adj_vars
+            ],
+            "compare_noise_reduction": [
+                {
+                    "amount": self.compare_row_nr_amount_vars[i].get(),
+                    "aggressive": bool(self.compare_row_nr_aggressive_vars[i].get()),
+                    "color": self.compare_row_nr_color_vars[i].get(),
+                    "edge": self.compare_row_nr_edge_vars[i].get(),
+                }
+                for i in range(2)
+            ],
         }
         path = filedialog.asksaveasfilename(
             title="Save session",
@@ -306,6 +647,11 @@ class SessionMixin:
         while len(saved_paths) < 2:
             saved_paths.append(None)
         path_vars = [tk.StringVar(value=p or "") for p in saved_paths]
+        compare_enabled = bool(session.get("compare_row_enabled", False) or any(session.get("compare_image_paths", [])))
+        compare_saved_paths = list(session.get("compare_image_paths", [None, None]))
+        while len(compare_saved_paths) < 2:
+            compare_saved_paths.append(None)
+        compare_path_vars = [tk.StringVar(value=p or "") for p in compare_saved_paths[:2]]
 
         tk.Label(dlg, text="Image files to load  (edit or Browse to choose different files):",
                  bg="#2b2b2b", fg="#ccc",
@@ -338,6 +684,37 @@ class SessionMixin:
                       bg="#555", fg="white", relief=tk.FLAT, padx=6, pady=2,
                       cursor="hand2").pack(side=tk.LEFT, padx=4)
 
+        if compare_enabled:
+            tk.Label(dlg, text="Bottom-row image files to load:",
+                     bg="#2b2b2b", fg="#ccc",
+                     font=("TkDefaultFont", 9, "bold")).pack(padx=12, pady=(10, 4), anchor=tk.W)
+            for pv, label in zip(compare_path_vars, [f"{BACKLIT_IMAGE_LABEL} (Bottom):", f"{FRONTLIT_IMAGE_LABEL} (Bottom):"]):
+                row = tk.Frame(dlg, bg="#2b2b2b")
+                row.pack(fill=tk.X, padx=10, pady=3)
+                tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa",
+                         width=23, anchor=tk.W).pack(side=tk.LEFT)
+                tk.Entry(row, textvariable=pv, bg="#444", fg="white",
+                         insertbackground="white", relief=tk.FLAT,
+                         width=60).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+                def browse_compare(var=pv):
+                    selected = filedialog.askopenfilename(
+                        filetypes=[
+                            ("Image files",
+                             "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
+                             "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
+                             "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
+                             "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
+                            ("All files", "*.*"),
+                        ]
+                    )
+                    if selected:
+                        var.set(selected)
+
+                tk.Button(row, text="Browse...", command=browse_compare,
+                          bg="#555", fg="white", relief=tk.FLAT, padx=6, pady=2,
+                          cursor="hand2").pack(side=tk.LEFT, padx=4)
+
         btn_row = tk.Frame(dlg, bg="#2b2b2b")
         btn_row.pack(pady=10)
         confirmed = [False]
@@ -356,6 +733,28 @@ class SessionMixin:
         self.root.wait_window(dlg)
         if not confirmed[0]:
             return
+
+        self.compare_row_images = [None, None]
+        self.compare_row_image_paths = [None, None]
+        self.compare_row_preview_images = [None, None]
+        self.compare_row_preview_scales = [1.0, 1.0]
+        self.compare_row_photos = [None, None]
+        self._compare_row_base_images = [None, None]
+        self._compare_row_rotated_cache = [None, None]
+        self._compare_row_last_rot = [None, None]
+        self._compare_row_rotated_preview_cache = [None, None]
+        self._compare_row_last_rot_preview = [None, None]
+        self.compare_row_off_x_var.set("0")
+        self.compare_row_off_y_var.set("0")
+        self.compare_row_rot_var.set("0.0")
+        self.compare_row_img2_scale_var.set("1.000")
+        self.compare_row_glob_rot_var.set("0.0")
+        self.compare_row_shift_x_var.set("0")
+        self.compare_row_shift_y_var.set("0")
+        self.compare_row_shift_rot_var.set("0.0")
+        self.compare_row_shift_scale_var.set("1.000")
+        self._clear_compare_row_align_pts()
+        self._clear_row_align_pts()
 
         final_paths = [pv.get().strip() or None for pv in path_vars]
         for i, loaded_path in enumerate(final_paths):
@@ -377,12 +776,48 @@ class SessionMixin:
                                          f"Could not load {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}:\n{loaded_path}\n\n{exc}",
                                          parent=self.root)
 
+        if compare_enabled:
+            final_compare_paths = [pv.get().strip() or None for pv in compare_path_vars]
+            for i, loaded_path in enumerate(final_compare_paths):
+                if loaded_path:
+                    try:
+                        img = _open_image(loaded_path)
+                        if img.mode not in ("RGB", "L"):
+                            img = img.convert("RGB")
+                        self.compare_row_images[i] = img
+                        self._compare_row_base_images[i] = img
+                        self.compare_row_image_paths[i] = loaded_path
+                        self.compare_row_preview_images[i], self.compare_row_preview_scales[i] = self._make_preview(img)
+                        self._compare_row_rotated_cache[i] = None
+                        self._compare_row_last_rot[i] = None
+                        self._compare_row_rotated_preview_cache[i] = None
+                        self._compare_row_last_rot_preview[i] = None
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Load error",
+                            f"Could not load {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL} (Bottom Row):\n{loaded_path}\n\n{exc}",
+                            parent=self.root,
+                        )
+
         alignment = session.get("alignment", {})
         self.off_x_var.set(str(alignment.get("off_x", "0")))
         self.off_y_var.set(str(alignment.get("off_y", "0")))
         self.rot_var.set(str(alignment.get("rot", "0.0")))
         self.img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
         self.glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
+        compare_alignment = session.get("compare_alignment", {})
+        self.compare_row_off_x_var.set(str(compare_alignment.get("off_x", "0")))
+        self.compare_row_off_y_var.set(str(compare_alignment.get("off_y", "0")))
+        self.compare_row_rot_var.set(str(compare_alignment.get("rot", "0.0")))
+        self.compare_row_img2_scale_var.set(str(compare_alignment.get("img2_scale", "1.000")))
+        self.compare_row_glob_rot_var.set(str(compare_alignment.get("glob_rot", "0.0")))
+        compare_row_transform = session.get("compare_row_transform", {})
+        self.compare_row_shift_x_var.set(str(compare_row_transform.get("off_x", "0")))
+        self.compare_row_shift_y_var.set(str(compare_row_transform.get("off_y", "0")))
+        self.compare_row_shift_rot_var.set(str(compare_row_transform.get("rot", "0.0")))
+        self.compare_row_shift_scale_var.set(str(compare_row_transform.get("scale", "1.000")))
+        self.show_compare_row_var.set(compare_enabled)
+        self._on_compare_row_toggle()
         if "mode" in session:
             self.mode_var.set(session["mode"])
             self._on_mode_change()
@@ -403,6 +838,8 @@ class SessionMixin:
         if "align_pts_img2" in session:
             self._align_pts_img2 = [tuple(p) for p in session["align_pts_img2"]]
         self._apply_adjustments_from_session(session)
+        if "compare_adjustments" in session:
+            self._apply_adjustments_from_session({"adjustments": session["compare_adjustments"]}, target_adj_vars=self.compare_row_adj_vars)
 
         def finish_load(applied_nr):
             self._schedule_render()

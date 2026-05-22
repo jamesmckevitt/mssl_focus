@@ -8,6 +8,8 @@ from tkinter import filedialog, ttk
 import numpy as np
 from PIL import Image, ImageFilter, ImageTk
 
+from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL
+
 _RAW_EXTENSIONS = {'.arw', '.nef', '.cr2', '.cr3', '.orf', '.rw2', '.dng', '.raf', '.pef', '.srw'}
 
 
@@ -71,6 +73,72 @@ def _denoise_color_nlm(cv2, rgb, amount, color_amount, edge_amount, aggressive):
     return cv2.cvtColor(denoised_ycc, cv2.COLOR_YCrCb2RGB)
 
 class ViewerMixin:
+    def _iter_all_canvases(self):
+        return (self.canvas1, self.canvas2, self.canvas3, self.canvas4)
+
+    def _iter_visible_canvases(self):
+        canvases = [self.canvas1]
+        if self.mode_var.get() != "overlay":
+            canvases.append(self.canvas2)
+        if self.show_compare_row_var.get():
+            canvases.append(self.canvas3)
+            if self.mode_var.get() != "overlay":
+                canvases.append(self.canvas4)
+        return tuple(canvases)
+
+    def _image_label(self, idx, row="top"):
+        base = BACKLIT_IMAGE_LABEL if idx == 0 else FRONTLIT_IMAGE_LABEL
+        if row == "compare":
+            return f"{base} (Bottom Row)"
+        return base
+
+    def _is_compare_canvas(self, widget):
+        return widget in (self.canvas3, self.canvas4)
+
+    def _get_image_state(self, row="top"):
+        if row == "compare":
+            return {
+                "images": self.compare_row_images,
+                "image_paths": self.compare_row_image_paths,
+                "preview_images": self.compare_row_preview_images,
+                "preview_scales": self.compare_row_preview_scales,
+                "photos": self.compare_row_photos,
+                "base_images": self._compare_row_base_images,
+                "rotated_cache": self._compare_row_rotated_cache,
+                "last_rot": self._compare_row_last_rot,
+                "rotated_preview_cache": self._compare_row_rotated_preview_cache,
+                "last_rot_preview": self._compare_row_last_rot_preview,
+                "adj_vars": self.compare_row_adj_vars,
+            }
+        return {
+            "images": self.images,
+            "image_paths": self.image_paths,
+            "preview_images": self.preview_images,
+            "preview_scales": self.preview_scales,
+            "photos": self.photos,
+            "base_images": self._base_images,
+            "rotated_cache": self._rotated_cache,
+            "last_rot": self._last_rot,
+            "rotated_preview_cache": self._rotated_preview_cache,
+            "last_rot_preview": self._last_rot_preview,
+            "adj_vars": self.adj_vars,
+        }
+
+    def _get_noise_reduction_state(self, row="top"):
+        if row == "compare":
+            return {
+                "amount_vars": self.compare_row_nr_amount_vars,
+                "aggressive_vars": self.compare_row_nr_aggressive_vars,
+                "color_vars": self.compare_row_nr_color_vars,
+                "edge_vars": self.compare_row_nr_edge_vars,
+            }
+        return {
+            "amount_vars": self.nr_amount_vars,
+            "aggressive_vars": self.nr_aggressive_vars,
+            "color_vars": self.nr_color_vars,
+            "edge_vars": self.nr_edge_vars,
+        }
+
     def _show_noise_reduction_progress(self, idx, amount, color_amount, edge_amount, aggressive):
         existing = getattr(self, "_nr_progress_dialog", None)
         if existing is not None:
@@ -133,9 +201,10 @@ class ViewerMixin:
             pass
         win.destroy()
 
-    def load_image(self, idx):
+    def load_image(self, idx, row="top"):
+        state = self._get_image_state(row)
         path = filedialog.askopenfilename(
-            title=f"Open Image {idx + 1}",
+            title=f"Open {self._image_label(idx, row)}",
             filetypes=[
                 ("Image files",
                  "*.tif *.tiff *.TIF *.TIFF "
@@ -152,46 +221,52 @@ class ViewerMixin:
         img = _open_image(path)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        self.images[idx] = img
-        self._base_images[idx] = img
-        self.image_paths[idx] = path
-        self.preview_images[idx], self.preview_scales[idx] = self._make_preview(img)
-        self._rotated_cache[idx] = None
-        self._last_rot[idx] = None
-        self._rotated_preview_cache[idx] = None
-        self._last_rot_preview[idx] = None
-        self.status_var.set(f"Image {idx + 1} loaded: {path}  ({img.width}x{img.height})")
+        state["images"][idx] = img
+        state["base_images"][idx] = img
+        state["image_paths"][idx] = path
+        state["preview_images"][idx], state["preview_scales"][idx] = self._make_preview(img)
+        state["rotated_cache"][idx] = None
+        state["last_rot"][idx] = None
+        state["rotated_preview_cache"][idx] = None
+        state["last_rot_preview"][idx] = None
+        if row == "compare":
+            self.show_compare_row_var.set(True)
+            self._on_compare_row_toggle()
+        self.status_var.set(f"{self._image_label(idx, row)} loaded: {path}  ({img.width}x{img.height})")
         self._schedule_render()
 
-    def _apply_noise_reduction(self, idx, on_complete=None):
+    def _apply_noise_reduction(self, idx, row="top", on_complete=None):
         """Apply NLM noise reduction (OpenCV, CIELAB space) in a background thread."""
-        base = self._base_images[idx]
+        image_state = self._get_image_state(row)
+        nr_state = self._get_noise_reduction_state(row)
+        base = image_state["base_images"][idx]
+        image_label = self._image_label(idx, row)
         if base is None:
-            self.status_var.set(f"Image {idx + 1}: no image loaded")
+            self.status_var.set(f"{image_label}: no image loaded")
             if on_complete is not None:
                 on_complete(False)
             return
-        amount = self.nr_amount_vars[idx].get()
-        color_amount = self.nr_color_vars[idx].get()
-        edge_amount = self.nr_edge_vars[idx].get()
-        aggressive = bool(self.nr_aggressive_vars[idx].get())
+        amount = nr_state["amount_vars"][idx].get()
+        color_amount = nr_state["color_vars"][idx].get()
+        edge_amount = nr_state["edge_vars"][idx].get()
+        aggressive = bool(nr_state["aggressive_vars"][idx].get())
 
         if amount == 0:
             img = base.copy()
-            self.images[idx] = img
-            self.preview_images[idx], self.preview_scales[idx] = self._make_preview(img)
-            self._rotated_cache[idx] = None
-            self._last_rot[idx] = None
-            self._rotated_preview_cache[idx] = None
-            self._last_rot_preview[idx] = None
-            self.status_var.set(f"Image {idx + 1}: noise reduction cleared")
+            image_state["images"][idx] = img
+            image_state["preview_images"][idx], image_state["preview_scales"][idx] = self._make_preview(img)
+            image_state["rotated_cache"][idx] = None
+            image_state["last_rot"][idx] = None
+            image_state["rotated_preview_cache"][idx] = None
+            image_state["last_rot_preview"][idx] = None
+            self.status_var.set(f"{image_label}: noise reduction cleared")
             self._schedule_render()
             if on_complete is not None:
                 on_complete(True)
             return
 
         self.status_var.set(
-            f"Image {idx + 1}: applying {'aggressive ' if aggressive else ''}NR "
+            f"{image_label}: applying {'aggressive ' if aggressive else ''}NR "
             f"(amount {amount}, color {color_amount}, edge {edge_amount}) -- please wait..."
         )
         self.root.update_idletasks()
@@ -249,19 +324,19 @@ class ViewerMixin:
                 return
             self._close_noise_reduction_progress()
             if status == "error":
-                self.status_var.set(f"Image {idx + 1}: NR failed -- {value}")
+                self.status_var.set(f"{image_label}: NR failed -- {value}")
                 if on_complete is not None:
                     on_complete(False)
                 return
             img = value
-            self.images[idx] = img
-            self.preview_images[idx], self.preview_scales[idx] = self._make_preview(img)
-            self._rotated_cache[idx] = None
-            self._last_rot[idx] = None
-            self._rotated_preview_cache[idx] = None
-            self._last_rot_preview[idx] = None
+            image_state["images"][idx] = img
+            image_state["preview_images"][idx], image_state["preview_scales"][idx] = self._make_preview(img)
+            image_state["rotated_cache"][idx] = None
+            image_state["last_rot"][idx] = None
+            image_state["rotated_preview_cache"][idx] = None
+            image_state["last_rot_preview"][idx] = None
             self.status_var.set(
-                f"Image {idx + 1}: {'aggressive ' if aggressive else ''}noise reduction applied "
+                f"{image_label}: {'aggressive ' if aggressive else ''}noise reduction applied "
                 f"(amount {amount}, color {color_amount}, edge {edge_amount})"
             )
             self._schedule_render()
@@ -274,8 +349,15 @@ class ViewerMixin:
     def _on_mode_change(self):
         if self.mode_var.get() == "overlay":
             self.canvas2.pack_forget()
+            self.canvas4.pack_forget()
         else:
             self.canvas2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            if self.show_compare_row_var.get():
+                self.canvas4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        if self.show_compare_row_var.get():
+            self.compare_canvas_row.pack(fill=tk.BOTH, expand=True)
+        else:
+            self.compare_canvas_row.pack_forget()
         self._schedule_render()
 
     def _on_alignment_change(self):
@@ -323,8 +405,8 @@ class ViewerMixin:
         self.pan_x += dx
         self.pan_y += dy
         self.last_pan = (event.x, event.y)
-        self.canvas1.move("img", dx, dy)
-        self.canvas2.move("img", dx, dy)
+        for canvas in self._iter_visible_canvases():
+            canvas.move("img", dx, dy)
         self.canvas1.move("annotations", dx, dy)
         self.canvas2.move("annotations", dx, dy)
         self._draw_cursors()
@@ -350,14 +432,32 @@ class ViewerMixin:
 
     def _on_mouse_move(self, event):
         self.cursor_pos = (event.x, event.y)
-        img_x = (event.x - self.pan_x) / self.zoom
-        img_y = (event.y - self.pan_y) / self.zoom
+        if event.widget is self.canvas2:
+            img_x, img_y = self._canvas_to_img2(event.x, event.y)
+            off_x, off_y, rot, _glob_rot = self._get_alignment_values()
+            scale = self._get_img2_scale()
+            row_name = FRONTLIT_IMAGE_LABEL
+        elif event.widget is self.canvas3:
+            img_x, img_y = self._canvas_to_compare_img1(event.x, event.y)
+            off_x, off_y, rot, _glob_rot = self._get_compare_row_alignment_values()
+            scale = self._get_compare_row_img2_scale()
+            row_name = f"{BACKLIT_IMAGE_LABEL} (Bottom Row)"
+        elif event.widget is self.canvas4:
+            img_x, img_y = self._canvas_to_compare_img2(event.x, event.y)
+            off_x, off_y, rot, _glob_rot = self._get_compare_row_alignment_values()
+            scale = self._get_compare_row_img2_scale()
+            row_name = f"{FRONTLIT_IMAGE_LABEL} (Bottom Row)"
+        else:
+            img_x, img_y = self._canvas_to_img1(event.x, event.y)
+            off_x, off_y, rot, _glob_rot = self._get_alignment_values()
+            scale = self._get_img2_scale()
+            row_name = BACKLIT_IMAGE_LABEL
         self.status_var.set(
-            f"Image coords: ({img_x:.1f}, {img_y:.1f})  |  "
+            f"{row_name} coords: ({img_x:.1f}, {img_y:.1f})  |  "
             f"Zoom: {self.zoom:.2f}x  |  "
-            f"Offset: ({self.off_x_var.get()}, {self.off_y_var.get()})  |  "
-            f"Rotation: {self.rot_var.get()}deg  |  "
-            f"Scale: {self.img2_scale_var.get()}x"
+            f"Offset: ({off_x}, {off_y})  |  "
+            f"Rotation: {rot:.2f}deg  |  "
+            f"Scale: {scale:.3f}x"
         )
         self._draw_cursors()
         if self.align_mode_var.get() or self.align_scale_mode_var.get():
@@ -366,6 +466,12 @@ class ViewerMixin:
             else:
                 self._align_guide_cursor = None
             self._draw_align_guide()
+        if self.compare_row_align_mode_var.get() or self.compare_row_align_scale_mode_var.get():
+            if event.widget is self.canvas4:
+                self._compare_row_align_guide_cursor = (event.x, event.y)
+            else:
+                self._compare_row_align_guide_cursor = None
+            self._draw_compare_row_align_guide()
         if self.crop_mode_var.get() and self._crop_corner1 is not None:
             self._draw_crop_preview(event.x, event.y)
 
@@ -454,24 +560,159 @@ class ViewerMixin:
             self.canvas1.tag_raise("badge1")
             self.canvas2.tag_raise("badge2")
 
+        self._render_compare_row()
+
         self._draw_annotations()
         self._draw_align_pts()
         self._draw_cursors()
 
-    def _get_view(self, img, off_x, off_y, rotation, canvas_w, canvas_h, idx=None, align_scale=1.0):
+    def _render_compare_row(self):
+        if not self.show_compare_row_var.get():
+            return
+
+        try:
+            off_x = int(float(self.compare_row_off_x_var.get()))
+            off_y = int(float(self.compare_row_off_y_var.get()))
+            rot = float(self.compare_row_rot_var.get())
+            glob_rot = float(self.compare_row_glob_rot_var.get())
+            img2_scale = max(0.1, float(self.compare_row_img2_scale_var.get()))
+            row_shift_x = int(float(self.compare_row_shift_x_var.get()))
+            row_shift_y = int(float(self.compare_row_shift_y_var.get()))
+            row_shift_rot = float(self.compare_row_shift_rot_var.get())
+            row_shift_scale = max(0.1, float(self.compare_row_shift_scale_var.get()))
+        except ValueError:
+            off_x = off_y = row_shift_x = row_shift_y = 0
+            rot = glob_rot = row_shift_rot = 0.0
+            img2_scale = row_shift_scale = 1.0
+
+        state = self._get_image_state("compare")
+        w3 = max(self.canvas3.winfo_width(), 1)
+        h3 = max(self.canvas3.winfo_height(), 1)
+
+        if self.mode_var.get() == "overlay":
+            v3 = self._get_view(
+                state["images"][0],
+                row_shift_x,
+                row_shift_y,
+                glob_rot + row_shift_rot,
+                w3,
+                h3,
+                idx=0,
+                align_scale=row_shift_scale,
+                preview_images=state["preview_images"],
+                preview_scales=state["preview_scales"],
+                rotated_cache=state["rotated_cache"],
+                last_rot=state["last_rot"],
+                rotated_preview_cache=state["rotated_preview_cache"],
+                last_rot_preview=state["last_rot_preview"],
+                adj_vars=state["adj_vars"],
+            )
+            v4 = self._get_view(
+                state["images"][1],
+                row_shift_x + int(round(off_x * row_shift_scale)),
+                row_shift_y + int(round(off_y * row_shift_scale)),
+                glob_rot + row_shift_rot + rot,
+                w3,
+                h3,
+                idx=1,
+                align_scale=row_shift_scale * img2_scale,
+                preview_images=state["preview_images"],
+                preview_scales=state["preview_scales"],
+                rotated_cache=state["rotated_cache"],
+                last_rot=state["last_rot"],
+                rotated_preview_cache=state["rotated_preview_cache"],
+                last_rot_preview=state["last_rot_preview"],
+                adj_vars=state["adj_vars"],
+            )
+            alpha = self.opacity_var.get()
+            if state["images"][0] and state["images"][1]:
+                blended = Image.blend(v3.convert("RGB"), v4.convert("RGB"), alpha)
+            elif state["images"][0]:
+                blended = v3
+            else:
+                blended = v4
+            state["photos"][0] = ImageTk.PhotoImage(blended)
+            if self.canvas3.find_withtag("img"):
+                self.canvas3.itemconfig("img", image=state["photos"][0])
+                self.canvas3.coords("img", 0, 0)
+            else:
+                self.canvas3.create_image(0, 0, anchor=tk.NW, image=state["photos"][0], tags="img")
+            self.canvas3.tag_raise("badge3")
+            return
+
+        w4 = max(self.canvas4.winfo_width(), 1)
+        h4 = max(self.canvas4.winfo_height(), 1)
+        v3 = self._get_view(
+            state["images"][0],
+            row_shift_x,
+            row_shift_y,
+            glob_rot + row_shift_rot,
+            w3,
+            h3,
+            idx=0,
+            align_scale=row_shift_scale,
+            preview_images=state["preview_images"],
+            preview_scales=state["preview_scales"],
+            rotated_cache=state["rotated_cache"],
+            last_rot=state["last_rot"],
+            rotated_preview_cache=state["rotated_preview_cache"],
+            last_rot_preview=state["last_rot_preview"],
+            adj_vars=state["adj_vars"],
+        )
+        v4 = self._get_view(
+            state["images"][1],
+            row_shift_x + int(round(off_x * row_shift_scale)),
+            row_shift_y + int(round(off_y * row_shift_scale)),
+            glob_rot + row_shift_rot + rot,
+            w4,
+            h4,
+            idx=1,
+            align_scale=row_shift_scale * img2_scale,
+            preview_images=state["preview_images"],
+            preview_scales=state["preview_scales"],
+            rotated_cache=state["rotated_cache"],
+            last_rot=state["last_rot"],
+            rotated_preview_cache=state["rotated_preview_cache"],
+            last_rot_preview=state["last_rot_preview"],
+            adj_vars=state["adj_vars"],
+        )
+
+        state["photos"][0] = ImageTk.PhotoImage(v3)
+        state["photos"][1] = ImageTk.PhotoImage(v4)
+        if self.canvas3.find_withtag("img"):
+            self.canvas3.itemconfig("img", image=state["photos"][0])
+            self.canvas3.coords("img", 0, 0)
+        else:
+            self.canvas3.create_image(0, 0, anchor=tk.NW, image=state["photos"][0], tags="img")
+        if self.canvas4.find_withtag("img"):
+            self.canvas4.itemconfig("img", image=state["photos"][1])
+            self.canvas4.coords("img", 0, 0)
+        else:
+            self.canvas4.create_image(0, 0, anchor=tk.NW, image=state["photos"][1], tags="img")
+        self.canvas3.tag_raise("badge3")
+        self.canvas4.tag_raise("badge4")
+
+    def _get_view(self, img, off_x, off_y, rotation, canvas_w, canvas_h, idx=None, align_scale=1.0,
+                  preview_images=None, preview_scales=None, rotated_cache=None, last_rot=None,
+                  rotated_preview_cache=None, last_rot_preview=None, adj_vars=None):
         placeholder = Image.new("RGB", (canvas_w, canvas_h), (30, 30, 30))
         if img is None:
             return placeholder
 
         source = img
         source_scale = 1.0
-        rot_cache = self._rotated_cache
-        rot_last = self._last_rot
-        if self._interacting and idx is not None and self.preview_images[idx] is not None:
-            source = self.preview_images[idx]
-            source_scale = self.preview_scales[idx]
-            rot_cache = self._rotated_preview_cache
-            rot_last = self._last_rot_preview
+        preview_images = self.preview_images if preview_images is None else preview_images
+        preview_scales = self.preview_scales if preview_scales is None else preview_scales
+        rot_cache = self._rotated_cache if rotated_cache is None else rotated_cache
+        rot_last = self._last_rot if last_rot is None else last_rot
+        rotated_preview_cache = self._rotated_preview_cache if rotated_preview_cache is None else rotated_preview_cache
+        last_rot_preview = self._last_rot_preview if last_rot_preview is None else last_rot_preview
+        adj_vars = self.adj_vars if adj_vars is None else adj_vars
+        if self._interacting and idx is not None and preview_images[idx] is not None:
+            source = preview_images[idx]
+            source_scale = preview_scales[idx]
+            rot_cache = rotated_preview_cache
+            rot_last = last_rot_preview
 
         if rotation != 0.0:
             if idx is not None and rot_last[idx] == rotation and rot_cache[idx] is not None:
@@ -535,7 +776,7 @@ class ViewerMixin:
             region = region.resize((target_w, target_h), resample=resample)
 
         if idx is not None:
-            region = self._apply_adjustments(region, idx)
+            region = self._apply_adjustments(region, idx, adj_vars=adj_vars)
 
         result = Image.new("RGB", (canvas_w, canvas_h), (30, 30, 30))
         result.paste(region, (dst_x0, dst_y0))
@@ -543,10 +784,7 @@ class ViewerMixin:
 
     def _draw_cursors(self):
         cx, cy = self.cursor_pos
-        mode = self.mode_var.get()
-        canvases = [self.canvas1] if mode == "overlay" else [self.canvas1, self.canvas2]
-
-        for canvas in canvases:
+        for canvas in self._iter_visible_canvases():
             canvas.delete("cursor")
             w = canvas.winfo_width()
             h = canvas.winfo_height()
@@ -576,6 +814,34 @@ class ViewerMixin:
         except ValueError:
             return 1.0
 
+    def _get_compare_row_alignment_values(self):
+        try:
+            return (
+                int(float(self.compare_row_off_x_var.get())),
+                int(float(self.compare_row_off_y_var.get())),
+                float(self.compare_row_rot_var.get()),
+                float(self.compare_row_glob_rot_var.get()),
+            )
+        except ValueError:
+            return 0, 0, 0.0, 0.0
+
+    def _get_compare_row_img2_scale(self):
+        try:
+            return max(0.1, float(self.compare_row_img2_scale_var.get()))
+        except ValueError:
+            return 1.0
+
+    def _get_compare_row_shift_values(self):
+        try:
+            return (
+                int(float(self.compare_row_shift_x_var.get())),
+                int(float(self.compare_row_shift_y_var.get())),
+                float(self.compare_row_shift_rot_var.get()),
+                max(0.1, float(self.compare_row_shift_scale_var.get())),
+            )
+        except ValueError:
+            return 0, 0, 0.0, 1.0
+
     def _rotate_display_point(self, x, y, cx, cy, rot_deg):
         if not rot_deg:
             return x, y
@@ -599,10 +865,19 @@ class ViewerMixin:
     def _expected_align_canvas(self):
         return 0 if len(self._align_pts_img1) <= len(self._align_pts_img2) else 1
 
+    def _expected_compare_align_canvas(self):
+        return 0 if len(self._compare_row_align_pts_img1) <= len(self._compare_row_align_pts_img2) else 1
+
+    def _expected_row_align_canvas(self):
+        return 0 if len(self._row_align_pts_top) <= len(self._row_align_pts_bottom) else 1
+
     def _on_canvas_leave(self, event):
         if event.widget is self.canvas2:
             self._align_guide_cursor = None
             self.canvas2.delete("align_guide")
+        if event.widget is self.canvas4:
+            self._compare_row_align_guide_cursor = None
+            self.canvas4.delete("compare_align_guide")
         if self.crop_mode_var.get() and self._crop_corner1 is not None:
             self.canvas1.delete("crop_preview")
             self.canvas2.delete("crop_preview")
@@ -629,6 +904,31 @@ class ViewerMixin:
             self.pan_y + off_y * self.zoom + ry * self.zoom,
         )
 
+    def _compare_img1_to_canvas3(self, img_x, img_y, glob_rot, row_shift_rot=0.0, row_shift_scale=1.0,
+                                 row_shift_x=0, row_shift_y=0):
+        if self.compare_row_images[0] is not None:
+            cx0, cy0 = self.compare_row_images[0].width / 2.0, self.compare_row_images[0].height / 2.0
+        else:
+            cx0 = cy0 = 0.0
+        rx, ry = self._rotate_display_point(img_x, img_y, cx0, cy0, glob_rot + row_shift_rot)
+        rx = cx0 + (rx - cx0) * row_shift_scale
+        ry = cy0 + (ry - cy0) * row_shift_scale
+        return self.pan_x + row_shift_x * self.zoom + rx * self.zoom, self.pan_y + row_shift_y * self.zoom + ry * self.zoom
+
+    def _compare_img1_to_canvas4(self, img_x, img_y, off_x, off_y, total_rot,
+                                 row_shift_x=0, row_shift_y=0, row_shift_scale=1.0):
+        if self.compare_row_images[1] is not None:
+            cx2, cy2 = self.compare_row_images[1].width / 2.0, self.compare_row_images[1].height / 2.0
+        else:
+            cx2 = cy2 = 0.0
+        rx, ry = self._rotate_display_point(img_x, img_y, cx2, cy2, total_rot)
+        rx = cx2 + (rx - cx2) * row_shift_scale
+        ry = cy2 + (ry - cy2) * row_shift_scale
+        return (
+            self.pan_x + (row_shift_x + off_x * row_shift_scale) * self.zoom + rx * self.zoom,
+            self.pan_y + (row_shift_y + off_y * row_shift_scale) * self.zoom + ry * self.zoom,
+        )
+
     def _canvas_to_img1(self, canvas_x, canvas_y, canvas_is_2=False):
         _, _, _, glob_rot = self._get_alignment_values()
         rx = (canvas_x - self.pan_x) / self.zoom
@@ -647,4 +947,29 @@ class ViewerMixin:
         cy2 = self.images[1].height / 2.0 if self.images[1] else 0.0
         rx = cx2 + (rx - cx2) / scale
         ry = cy2 + (ry - cy2) / scale
+        return self._unrotate_display_point(rx, ry, cx2, cy2, total_rot)
+
+    def _canvas_to_compare_img1(self, canvas_x, canvas_y):
+        row_shift_x, row_shift_y, row_shift_rot, row_shift_scale = self._get_compare_row_shift_values()
+        _, _, _, glob_rot = self._get_compare_row_alignment_values()
+        rx = (canvas_x - self.pan_x) / self.zoom - row_shift_x
+        ry = (canvas_y - self.pan_y) / self.zoom - row_shift_y
+        cx0 = self.compare_row_images[0].width / 2.0 if self.compare_row_images[0] else 0.0
+        cy0 = self.compare_row_images[0].height / 2.0 if self.compare_row_images[0] else 0.0
+        rx = cx0 + (rx - cx0) / row_shift_scale
+        ry = cy0 + (ry - cy0) / row_shift_scale
+        return self._unrotate_display_point(rx, ry, cx0, cy0, glob_rot + row_shift_rot)
+
+    def _canvas_to_compare_img2(self, canvas_x, canvas_y):
+        off_x, off_y, rot, glob_rot = self._get_compare_row_alignment_values()
+        row_shift_x, row_shift_y, row_shift_rot, row_shift_scale = self._get_compare_row_shift_values()
+        total_rot = glob_rot + row_shift_rot + rot
+        internal_scale = self._get_compare_row_img2_scale()
+        total_scale = row_shift_scale * internal_scale
+        rx = (canvas_x - self.pan_x) / self.zoom - row_shift_x - off_x * row_shift_scale
+        ry = (canvas_y - self.pan_y) / self.zoom - row_shift_y - off_y * row_shift_scale
+        cx2 = self.compare_row_images[1].width / 2.0 if self.compare_row_images[1] else 0.0
+        cy2 = self.compare_row_images[1].height / 2.0 if self.compare_row_images[1] else 0.0
+        rx = cx2 + (rx - cx2) / max(total_scale, 1e-6)
+        ry = cy2 + (ry - cy2) / max(total_scale, 1e-6)
         return self._unrotate_display_point(rx, ry, cx2, cy2, total_rot)

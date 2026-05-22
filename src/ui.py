@@ -27,23 +27,47 @@ class UIBuilderMixin:
 
         self._align_apply_menu_ref = None
         self._align_scale_apply_menu_ref = None
+        self._compare_align_apply_menu_ref = None
+        self._compare_align_scale_apply_menu_ref = None
+        self._row_align_apply_menu_ref = None
+        self._row_align_scale_apply_menu_ref = None
         self._control_panel = None
         self._control_notebook = None
         self._control_tabs = {}
+        self._control_tab_titles = {}
 
         self._build_menu_bar()
         self._build_control_panel()
         self._hide_control_panel()
 
+        self.action_bar = tk.Frame(self.root, bg="#16161c")
+        self.action_bar.pack(fill=tk.X, side=tk.TOP)
+        self.primary_action_row = tk.Frame(self.action_bar, bg="#16161c", pady=4)
+        self.primary_action_row.pack(fill=tk.X)
+        self.compare_action_row = tk.Frame(self.action_bar, bg="#10141c", pady=4)
+        self._build_action_rows()
+
         self.canvas_frame = tk.Frame(self.root, bg="#1e1e1e")
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas1 = tk.Canvas(self.canvas_frame, bg="#1e1e1e",
+        self.top_canvas_row = tk.Frame(self.canvas_frame, bg="#1e1e1e")
+        self.top_canvas_row.pack(fill=tk.BOTH, expand=True)
+
+        self.compare_canvas_row = tk.Frame(self.canvas_frame, bg="#161616")
+
+        self.canvas1 = tk.Canvas(self.top_canvas_row, bg="#1e1e1e",
                                  cursor="crosshair", highlightthickness=0)
-        self.canvas2 = tk.Canvas(self.canvas_frame, bg="#1e1e1e",
+        self.canvas2 = tk.Canvas(self.top_canvas_row, bg="#1e1e1e",
                                  cursor="crosshair", highlightthickness=0)
         self.canvas1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.canvas3 = tk.Canvas(self.compare_canvas_row, bg="#161616",
+                     cursor="crosshair", highlightthickness=0)
+        self.canvas4 = tk.Canvas(self.compare_canvas_row, bg="#161616",
+                     cursor="crosshair", highlightthickness=0)
+        self.canvas3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.canvas4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.canvas1.create_text(8, 8, anchor=tk.NW, text=BACKLIT_IMAGE_LABEL,
                                  fill="#ffcc00", font=("TkDefaultFont", 9, "bold"),
@@ -51,13 +75,21 @@ class UIBuilderMixin:
         self.canvas2.create_text(8, 8, anchor=tk.NW, text=FRONTLIT_IMAGE_LABEL,
                                  fill="#00ccff", font=("TkDefaultFont", 9, "bold"),
                                  tags="badge2")
+        self.canvas3.create_text(8, 8, anchor=tk.NW,
+                     text=f"{BACKLIT_IMAGE_LABEL} (Bottom Row)",
+                     fill="#ffcc00", font=("TkDefaultFont", 9, "bold"),
+                     tags="badge3")
+        self.canvas4.create_text(8, 8, anchor=tk.NW,
+                     text=f"{FRONTLIT_IMAGE_LABEL} (Bottom Row)",
+                     fill="#00ccff", font=("TkDefaultFont", 9, "bold"),
+                     tags="badge4")
 
         self.status_var = tk.StringVar(value="Load two images to begin.")
         tk.Label(self.root, textvariable=self.status_var, anchor=tk.W,
                  bg="#1a1a1a", fg="#aaa", font=("TkDefaultFont", 8),
                  padx=6).pack(side=tk.BOTTOM, fill=tk.X)
 
-        for canvas in (self.canvas1, self.canvas2):
+        for canvas in (self.canvas1, self.canvas2, self.canvas3, self.canvas4):
             canvas.bind("<Motion>", self._on_mouse_move)
             canvas.bind("<MouseWheel>", self._on_zoom)
             canvas.bind("<Button-4>", self._on_zoom)
@@ -78,6 +110,101 @@ class UIBuilderMixin:
         self.root.bind("<Control-Left>", lambda e: self._nudge_global(-0.5))
         self.root.bind("<Control-Right>", lambda e: self._nudge_global(0.5))
 
+    def _make_action_button(self, parent, text, command, bg, fg):
+        tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=bg,
+            fg=fg,
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            activebackground=bg,
+            activeforeground=fg,
+        ).pack(side=tk.LEFT, padx=4)
+
+    def _build_action_rows(self):
+        self._make_action_button(
+            self.primary_action_row,
+            "Load Top Session",
+            self._load_top_row_from_session,
+            "#2a3a5a",
+            "#aaccff",
+        )
+        self._make_action_button(
+            self.primary_action_row,
+            BACKLIT_IMAGE_LABEL,
+            lambda: self._show_control_panel("image1"),
+            "#554400",
+            "#ffdd88",
+        )
+        self._make_action_button(
+            self.primary_action_row,
+            FRONTLIT_IMAGE_LABEL,
+            lambda: self._show_control_panel("image2"),
+            "#003f55",
+            "#99e6ff",
+        )
+        self._make_action_button(
+            self.primary_action_row,
+            "Alignment",
+            lambda: self._show_control_panel("alignment"),
+            "#224444",
+            "#88ffff",
+        )
+        self._make_action_button(
+            self.primary_action_row,
+            "Annotations",
+            lambda: self._show_control_panel("annotations"),
+            "#4d3d1a",
+            "#ffe199",
+        )
+        self._make_action_button(
+            self.primary_action_row,
+            "Export / Session",
+            lambda: self._show_control_panel("session"),
+            "#444",
+            "#ddd",
+        )
+
+        self._make_action_button(
+            self.compare_action_row,
+            "Load Bottom Session",
+            self._load_compare_row_from_session,
+            "#2a3a5a",
+            "#aaccff",
+        )
+        self._make_action_button(
+            self.compare_action_row,
+            f"{BACKLIT_IMAGE_LABEL} (Bottom)",
+            lambda: self._show_control_panel("compare_image1"),
+            "#554400",
+            "#ffdd88",
+        )
+        self._make_action_button(
+            self.compare_action_row,
+            f"{FRONTLIT_IMAGE_LABEL} (Bottom)",
+            lambda: self._show_control_panel("compare_image2"),
+            "#003f55",
+            "#99e6ff",
+        )
+        self._make_action_button(
+            self.compare_action_row,
+            "Bottom Row Align",
+            lambda: self._show_control_panel("compare"),
+            "#224444",
+            "#88ffff",
+        )
+        self._make_action_button(
+            self.compare_action_row,
+            "Align Rows",
+            lambda: self._show_control_panel("compare"),
+            "#553355",
+            "#ffbbff",
+        )
+
     def _build_menu_bar(self):
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
@@ -90,6 +217,8 @@ class UIBuilderMixin:
         file_menu.add_separator()
         file_menu.add_command(label="Save Session...", command=self._save_session)
         file_menu.add_command(label="Load Session...", command=self._load_session)
+        file_menu.add_command(label="Load Session As Top Row...", command=self._load_top_row_from_session)
+        file_menu.add_command(label="Load Session As Bottom Row...", command=self._load_compare_row_from_session)
         file_menu.add_command(label="Import Image Settings...", command=self._import_image_settings_from_session)
         file_menu.add_command(label="Import Annotations...", command=self._import_annotations_from_session)
         file_menu.add_separator()
@@ -102,12 +231,16 @@ class UIBuilderMixin:
         view_menu.add_radiobutton(label="Overlay", variable=self.mode_var,
                                   value="overlay", command=self._on_mode_change)
         view_menu.add_separator()
+        view_menu.add_checkbutton(label="Show Comparison Row", variable=self.show_compare_row_var,
+                      command=self._on_compare_row_toggle)
         view_menu.add_command(label="Show View Controls", command=lambda: self._show_control_panel("view"))
+        view_menu.add_command(label="Show Compare Row Controls", command=self._show_compare_controls)
         view_menu.add_command(label="Show All Controls", command=self._show_control_panel)
         menubar.add_cascade(label="View", menu=view_menu)
 
         align_menu = tk.Menu(menubar, tearoff=False)
         align_menu.add_command(label="Show Alignment Controls", command=lambda: self._show_control_panel("alignment"))
+        align_menu.add_command(label="Show Compare Row Controls", command=self._show_compare_controls)
         align_menu.add_separator()
         align_menu.add_checkbutton(label="Level Line", variable=self.level_mode_var,
                                    command=self._on_level_mode_change)
@@ -122,6 +255,30 @@ class UIBuilderMixin:
                                state=tk.DISABLED)
         self._align_scale_apply_menu_ref = (align_menu, align_menu.index(tk.END))
         align_menu.add_command(label="Clear Alignment Points", command=self._clear_align_pts)
+        align_menu.add_separator()
+        align_menu.add_checkbutton(label="Point Align Bottom Row", variable=self.compare_row_align_mode_var,
+                                   command=self._on_compare_row_align_mode_change)
+        align_menu.add_command(label="Apply Bottom Row Point Align", command=self._apply_compare_row_alignment,
+                               state=tk.DISABLED)
+        self._compare_align_apply_menu_ref = (align_menu, align_menu.index(tk.END))
+        align_menu.add_checkbutton(label="Point Align Bottom Row + Scale", variable=self.compare_row_align_scale_mode_var,
+                                   command=self._on_compare_row_align_scale_mode_change)
+        align_menu.add_command(label="Apply Bottom Row Align + Scale", command=self._apply_compare_row_alignment_with_scale,
+                               state=tk.DISABLED)
+        self._compare_align_scale_apply_menu_ref = (align_menu, align_menu.index(tk.END))
+        align_menu.add_command(label="Clear Bottom Row Alignment Points", command=self._clear_compare_row_align_pts)
+        align_menu.add_separator()
+        align_menu.add_checkbutton(label="Point Align Rows", variable=self.row_align_mode_var,
+                                   command=self._on_row_align_mode_change)
+        align_menu.add_command(label="Apply Row Point Align", command=self._apply_row_alignment,
+                               state=tk.DISABLED)
+        self._row_align_apply_menu_ref = (align_menu, align_menu.index(tk.END))
+        align_menu.add_checkbutton(label="Point Align Rows + Scale", variable=self.row_align_scale_mode_var,
+                                   command=self._on_row_align_scale_mode_change)
+        align_menu.add_command(label="Apply Row Align + Scale", command=self._apply_row_alignment_with_scale,
+                               state=tk.DISABLED)
+        self._row_align_scale_apply_menu_ref = (align_menu, align_menu.index(tk.END))
+        align_menu.add_command(label="Clear Row Alignment Points", command=self._clear_row_align_pts)
         align_menu.add_separator()
         align_menu.add_command(label="Reset Alignment", command=self._reset_alignment)
         align_menu.add_command(
@@ -194,23 +351,60 @@ class UIBuilderMixin:
         self._control_tabs = {
             "view": self._create_control_tab(notebook, "View"),
             "alignment": self._create_control_tab(notebook, "Alignment"),
+            "compare": self._create_control_tab(notebook, "Compare Row"),
             "annotations": self._create_control_tab(notebook, "Annotations"),
             "image1": self._create_control_tab(notebook, BACKLIT_IMAGE_LABEL),
             "image2": self._create_control_tab(notebook, FRONTLIT_IMAGE_LABEL),
+            "compare_image1": self._create_control_tab(notebook, f"{BACKLIT_IMAGE_LABEL} (Bottom)"),
+            "compare_image2": self._create_control_tab(notebook, f"{FRONTLIT_IMAGE_LABEL} (Bottom)"),
             "session": self._create_control_tab(notebook, "Session / Export"),
         }
 
         self._populate_view_tab(self._control_tabs["view"])
         self._populate_alignment_tab(self._control_tabs["alignment"])
+        self._populate_compare_tab(self._control_tabs["compare"])
         self._populate_annotations_tab(self._control_tabs["annotations"])
         self._populate_image_tab(self._control_tabs["image1"], 0, "#ffcc00")
         self._populate_image_tab(self._control_tabs["image2"], 1, "#00ccff")
+        self._populate_image_tab(self._control_tabs["compare_image1"], 0, "#ffcc00", row="compare")
+        self._populate_image_tab(self._control_tabs["compare_image2"], 1, "#00ccff", row="compare")
         self._populate_session_tab(self._control_tabs["session"])
+        self._update_compare_control_visibility()
 
     def _create_control_tab(self, notebook, title):
         frame = tk.Frame(notebook, bg="#202028")
         notebook.add(frame, text=title)
+        self._control_tab_titles[frame] = title
         return frame
+
+    def _show_compare_controls(self):
+        if not self.show_compare_row_var.get():
+            self.show_compare_row_var.set(True)
+            self._on_compare_row_toggle()
+        self._show_control_panel("compare")
+
+    def _set_control_tab_visibility(self, tab_name, visible):
+        if self._control_notebook is None or tab_name not in self._control_tabs:
+            return
+        frame = self._control_tabs[tab_name]
+        if visible:
+            try:
+                self._control_notebook.tab(frame, state="normal")
+            except tk.TclError:
+                self._control_notebook.add(frame, text=self._control_tab_titles.get(frame, tab_name))
+        else:
+            try:
+                tab_state = self._control_notebook.tab(frame, "state")
+            except tk.TclError:
+                return
+            if tab_state != "hidden" and self._control_notebook.select() == str(frame):
+                self._control_notebook.select(self._control_tabs["view"])
+            self._control_notebook.tab(frame, state="hidden")
+
+    def _update_compare_control_visibility(self):
+        visible = bool(self.show_compare_row_var.get())
+        for tab_name in ("compare", "compare_image1", "compare_image2"):
+            self._set_control_tab_visibility(tab_name, visible)
 
     def _make_control_section(self, parent, title):
         section = tk.LabelFrame(parent, text=title, bg="#202028", fg="#dddddd",
@@ -310,6 +504,128 @@ class UIBuilderMixin:
                  bg="#202028", fg="#888888", justify=tk.LEFT,
                  wraplength=380, font=("TkDefaultFont", 8)).pack(anchor=tk.W, pady=(4, 0))
 
+    def _populate_compare_tab(self, parent):
+        display = self._make_control_section(parent, "Bottom Row")
+        tk.Checkbutton(display, text="Show comparison row",
+                       variable=self.show_compare_row_var, command=self._on_compare_row_toggle,
+                       bg="#202028", fg="#dddddd", selectcolor="#444",
+                       activebackground="#202028").pack(anchor=tk.W, pady=2)
+        tk.Label(display,
+                 text="Use the bottom row to compare a second backlit/frontlit pair and align that pair separately from the top row.",
+                 bg="#202028", fg="#888888", justify=tk.LEFT,
+                 wraplength=380, font=("TkDefaultFont", 8)).pack(anchor=tk.W, pady=(4, 0))
+
+        files = self._make_control_section(parent, "Bottom Row Images")
+        tk.Button(files, text=f"Load {BACKLIT_IMAGE_LABEL} (Bottom)",
+                  command=lambda: self.load_image(0, row="compare"),
+                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(files, text=f"Load {FRONTLIT_IMAGE_LABEL} (Bottom)",
+                  command=lambda: self.load_image(1, row="compare"),
+                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(files, text="Load Bottom Row From Session",
+                  command=self._load_compare_row_from_session,
+                  bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=10, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+        align = self._make_control_section(parent, f"Bottom-Row {FRONTLIT_IMAGE_LABEL} Alignment")
+        row1 = tk.Frame(align, bg="#202028")
+        row1.pack(fill=tk.X, pady=2)
+        tk.Label(row1, text="Offset X:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT)
+        self._make_spinbox(row1, self.compare_row_off_x_var, -9999, 9999)
+        tk.Label(row1, text="Y:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT, padx=(8, 0))
+        self._make_spinbox(row1, self.compare_row_off_y_var, -9999, 9999)
+
+        row2 = tk.Frame(align, bg="#202028")
+        row2.pack(fill=tk.X, pady=2)
+        tk.Label(row2, text="Rotation (deg):", bg="#202028", fg="#dddddd").pack(side=tk.LEFT)
+        self._make_spinbox(row2, self.compare_row_rot_var, -180, 180, inc=0.1, width=6)
+        tk.Label(row2, text="Scale:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT, padx=(8, 0))
+        self._make_spinbox(row2, self.compare_row_img2_scale_var, 0.1, 10.0, inc=0.01, width=6)
+
+        row3 = tk.Frame(align, bg="#202028")
+        row3.pack(fill=tk.X, pady=2)
+        tk.Label(row3, text="Global rot:", bg="#202028", fg="#aaffaa").pack(side=tk.LEFT)
+        self._make_spinbox(row3, self.compare_row_glob_rot_var, -360, 360, inc=0.1, width=7)
+
+        tools = self._make_control_section(parent, "Bottom-Row Alignment Tools")
+        tk.Checkbutton(tools, text="Point align bottom row",
+                       variable=self.compare_row_align_mode_var, command=self._on_compare_row_align_mode_change,
+                       bg="#202028", fg="#88ffff", selectcolor="#444",
+                       activebackground="#202028").pack(anchor=tk.W, pady=2)
+        tk.Checkbutton(tools, text="Point align + scale bottom row",
+                       variable=self.compare_row_align_scale_mode_var, command=self._on_compare_row_align_scale_mode_change,
+                       bg="#202028", fg="#88ffbb", selectcolor="#444",
+                       activebackground="#202028").pack(anchor=tk.W, pady=2)
+        tool_btns = tk.Frame(tools, bg="#202028")
+        tool_btns.pack(fill=tk.X, pady=(6, 2))
+        self._compare_align_apply_btn = tk.Button(
+            tool_btns, text="Apply bottom align", command=self._apply_compare_row_alignment,
+            bg="#224444", fg="#88ffff", relief=tk.FLAT, padx=8, pady=3,
+            cursor="hand2", state=tk.DISABLED)
+        self._compare_align_apply_btn.pack(side=tk.LEFT, padx=4)
+        self._compare_align_scale_apply_btn = tk.Button(
+            tool_btns, text="Apply bottom align + scale", command=self._apply_compare_row_alignment_with_scale,
+            bg="#225544", fg="#88ffbb", relief=tk.FLAT, padx=8, pady=3,
+            cursor="hand2", state=tk.DISABLED)
+        self._compare_align_scale_apply_btn.pack(side=tk.LEFT, padx=4)
+        tk.Button(tool_btns, text="Clear pts", command=self._clear_compare_row_align_pts,
+                  bg="#444", fg="white", relief=tk.FLAT, padx=8, pady=3,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+        rows = self._make_control_section(parent, "Align Top Row To Bottom Row")
+        tk.Checkbutton(rows, text="Row align mode",
+                       variable=self.row_align_mode_var, command=self._on_row_align_mode_change,
+                       bg="#202028", fg="#ff88ff", selectcolor="#444",
+                       activebackground="#202028").pack(anchor=tk.W, pady=2)
+        tk.Checkbutton(rows, text="Row align + scale mode",
+                   variable=self.row_align_scale_mode_var, command=self._on_row_align_scale_mode_change,
+                   bg="#202028", fg="#ffbbff", selectcolor="#444",
+                   activebackground="#202028").pack(anchor=tk.W, pady=2)
+        tk.Label(rows,
+                 text="Warning: use this only after both rows are already aligned within themselves.",
+                 bg="#202028", fg="#ffbbbb", justify=tk.LEFT,
+                 wraplength=380, font=("TkDefaultFont", 8)).pack(anchor=tk.W, pady=(2, 4))
+
+        shift1 = tk.Frame(rows, bg="#202028")
+        shift1.pack(fill=tk.X, pady=2)
+        tk.Label(shift1, text="Shift X:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT)
+        self._make_spinbox(shift1, self.compare_row_shift_x_var, -9999, 9999)
+        tk.Label(shift1, text="Y:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT, padx=(8, 0))
+        self._make_spinbox(shift1, self.compare_row_shift_y_var, -9999, 9999)
+
+        shift2 = tk.Frame(rows, bg="#202028")
+        shift2.pack(fill=tk.X, pady=2)
+        tk.Label(shift2, text="Rotation:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT)
+        self._make_spinbox(shift2, self.compare_row_shift_rot_var, -180, 180, inc=0.1, width=6)
+        tk.Label(shift2, text="Scale:", bg="#202028", fg="#dddddd").pack(side=tk.LEFT, padx=(8, 0))
+        self._make_spinbox(shift2, self.compare_row_shift_scale_var, 0.1, 10.0, inc=0.01, width=6)
+
+        row_btns = tk.Frame(rows, bg="#202028")
+        row_btns.pack(fill=tk.X, pady=(6, 2))
+        self._row_align_apply_btn = tk.Button(
+            row_btns, text="Apply row align", command=self._apply_row_alignment,
+            bg="#553355", fg="#ffbbff", relief=tk.FLAT, padx=8, pady=3,
+            cursor="hand2", state=tk.DISABLED)
+        self._row_align_apply_btn.pack(side=tk.LEFT, padx=4)
+        self._row_align_scale_apply_btn = tk.Button(
+            row_btns, text="Apply row align + scale", command=self._apply_row_alignment_with_scale,
+            bg="#664466", fg="#ffccff", relief=tk.FLAT, padx=8, pady=3,
+            cursor="hand2", state=tk.DISABLED)
+        self._row_align_scale_apply_btn.pack(side=tk.LEFT, padx=4)
+        tk.Button(row_btns, text="Clear pts", command=self._clear_row_align_pts,
+                  bg="#444", fg="white", relief=tk.FLAT, padx=8, pady=3,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(row_btns, text="Reset row transform",
+                  command=lambda: (self.compare_row_shift_x_var.set("0"),
+                                   self.compare_row_shift_y_var.set("0"),
+                                   self.compare_row_shift_rot_var.set("0.0"),
+                                   self.compare_row_shift_scale_var.set("1.000"),
+                                   self._schedule_render()),
+                  bg="#444", fg="white", relief=tk.FLAT, padx=8, pady=3,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+
     def _populate_annotations_tab(self, parent):
         tools = self._make_control_section(parent, "Annotation Tools")
         tk.Checkbutton(tools, text="Annotate",
@@ -376,7 +692,7 @@ class UIBuilderMixin:
                   bg="#663333", fg="white", relief=tk.FLAT, padx=8, pady=3,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
 
-    def _populate_image_tab(self, parent, img_idx, accent_colour):
+    def _populate_image_tab(self, parent, img_idx, accent_colour, row="top"):
         adj_defs = [
             ("brightness", 0.1, 3.0, "Brightness"),
             ("contrast", 0.1, 3.0, "Contrast"),
@@ -384,30 +700,38 @@ class UIBuilderMixin:
             ("whites", 55.0, 255.0, "Whites"),
         ]
 
-        actions = self._make_control_section(parent, f"Image {img_idx + 1} Actions")
-        tk.Button(actions, text=f"Load Image {img_idx + 1}", command=lambda i=img_idx: self.load_image(i),
+        target_row = row
+        image_label = self._image_label(img_idx, target_row)
+        adj_vars = self.compare_row_adj_vars if target_row == "compare" else self.adj_vars
+        nr_amount_vars = self.compare_row_nr_amount_vars if target_row == "compare" else self.nr_amount_vars
+        nr_aggressive_vars = self.compare_row_nr_aggressive_vars if target_row == "compare" else self.nr_aggressive_vars
+        nr_color_vars = self.compare_row_nr_color_vars if target_row == "compare" else self.nr_color_vars
+        nr_edge_vars = self.compare_row_nr_edge_vars if target_row == "compare" else self.nr_edge_vars
+
+        actions = self._make_control_section(parent, f"{image_label} Actions")
+        tk.Button(actions, text=f"Load {image_label}", command=lambda i=img_idx, r=target_row: self.load_image(i, row=r),
                   bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
         tk.Button(actions, text="Reset adjustments",
-                  command=lambda i=img_idx: self._reset_image_adjustments(i),
+                  command=lambda i=img_idx, r=target_row: self._reset_image_adjustments(i, row=r),
                   bg="#444", fg="white", relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
 
         tone = self._make_control_section(parent, "Tone and Levels")
         for key, lo, hi, label in adj_defs:
-            row = tk.Frame(tone, bg="#202028")
-            row.pack(fill=tk.X, pady=4)
-            tk.Label(row, text=label + ":", bg="#202028", fg=accent_colour,
+            tone_row = tk.Frame(tone, bg="#202028")
+            tone_row.pack(fill=tk.X, pady=4)
+            tk.Label(tone_row, text=label + ":", bg="#202028", fg=accent_colour,
                      width=11, anchor=tk.W).pack(side=tk.LEFT)
-            ttk.Scale(row, from_=lo, to=hi, length=240, orient=tk.HORIZONTAL,
-                      variable=self.adj_vars[img_idx][key],
+            ttk.Scale(tone_row, from_=lo, to=hi, length=240, orient=tk.HORIZONTAL,
+                      variable=adj_vars[img_idx][key],
                       command=lambda _v: self._schedule_render()).pack(side=tk.LEFT, padx=6)
 
         noise = self._make_control_section(parent, "Noise Reduction")
         nr_row = tk.Frame(noise, bg="#202028")
         nr_row.pack(fill=tk.X, pady=4)
         tk.Label(nr_row, text="NR:", bg="#202028", fg="#dddddd", width=11, anchor=tk.W).pack(side=tk.LEFT)
-        tk.Scale(nr_row, variable=self.nr_amount_vars[img_idx],
+        tk.Scale(nr_row, variable=nr_amount_vars[img_idx],
                  from_=0, to=100, resolution=10, orient=tk.HORIZONTAL, length=220,
                  bg="#202028", fg="#dddddd", troughcolor="#444",
                  highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=6)
@@ -415,7 +739,7 @@ class UIBuilderMixin:
         cnr_row = tk.Frame(noise, bg="#202028")
         cnr_row.pack(fill=tk.X, pady=4)
         tk.Label(cnr_row, text="Color NR:", bg="#202028", fg="#7fd7ff", width=11, anchor=tk.W).pack(side=tk.LEFT)
-        tk.Scale(cnr_row, variable=self.nr_color_vars[img_idx],
+        tk.Scale(cnr_row, variable=nr_color_vars[img_idx],
                  from_=0, to=100, resolution=10, orient=tk.HORIZONTAL, length=220,
                  bg="#202028", fg="#dddddd", troughcolor="#444",
                  highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=6)
@@ -423,22 +747,22 @@ class UIBuilderMixin:
         edge_row = tk.Frame(noise, bg="#202028")
         edge_row.pack(fill=tk.X, pady=4)
         tk.Label(edge_row, text="Edge NR:", bg="#202028", fg="#9fffb0", width=11, anchor=tk.W).pack(side=tk.LEFT)
-        tk.Scale(edge_row, variable=self.nr_edge_vars[img_idx],
+        tk.Scale(edge_row, variable=nr_edge_vars[img_idx],
                  from_=0, to=100, resolution=10, orient=tk.HORIZONTAL, length=220,
                  bg="#202028", fg="#dddddd", troughcolor="#444",
                  highlightthickness=0, sliderlength=12).pack(side=tk.LEFT, padx=6)
 
         tk.Checkbutton(noise, text="Aggressive",
-                       variable=self.nr_aggressive_vars[img_idx],
+                   variable=nr_aggressive_vars[img_idx],
                        bg="#202028", fg="#aaccff", selectcolor="#334455",
                        activebackground="#202028", activeforeground="#aaccff").pack(anchor=tk.W, pady=4)
 
         noise_btns = tk.Frame(noise, bg="#202028")
         noise_btns.pack(fill=tk.X, pady=(6, 2))
-        tk.Button(noise_btns, text="Apply", command=lambda i=img_idx: self._apply_noise_reduction(i),
+        tk.Button(noise_btns, text="Apply", command=lambda i=img_idx, r=target_row: self._apply_noise_reduction(i, row=r),
                   bg="#334455", fg="#aaccff", relief=tk.FLAT, padx=8, pady=3,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
-        tk.Button(noise_btns, text="Clear NR", command=lambda i=img_idx: self._clear_noise_reduction(i),
+        tk.Button(noise_btns, text="Clear NR", command=lambda i=img_idx, r=target_row: self._clear_noise_reduction(i, row=r),
                   bg="#444", fg="white", relief=tk.FLAT, padx=8, pady=3,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
 
@@ -455,6 +779,9 @@ class UIBuilderMixin:
         tk.Button(btns, text="Load session", command=self._load_session,
                   bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Load top row session", command=self._load_top_row_from_session,
+              bg="#2a3a5a", fg="#aaccff", relief=tk.FLAT, padx=10, pady=4,
+              cursor="hand2").pack(side=tk.LEFT, padx=4)
 
         import_row = tk.Frame(sessions, bg="#202028")
         import_row.pack(fill=tk.X, pady=(8, 0))
@@ -510,9 +837,20 @@ class UIBuilderMixin:
         y = self.root.winfo_rooty() + 48
         self._control_panel.geometry(f"+{x}+{y}")
 
-    def _clear_noise_reduction(self, idx):
-        self.nr_amount_vars[idx].set(0)
-        self._apply_noise_reduction(idx)
+    def _clear_noise_reduction(self, idx, row="top"):
+        amount_vars = self.compare_row_nr_amount_vars if row == "compare" else self.nr_amount_vars
+        amount_vars[idx].set(0)
+        self._apply_noise_reduction(idx, row=row)
+
+    def _on_compare_row_toggle(self):
+        if self.show_compare_row_var.get():
+            self.compare_canvas_row.pack(fill=tk.BOTH, expand=True)
+            self.compare_action_row.pack(fill=tk.X)
+        else:
+            self.compare_canvas_row.pack_forget()
+            self.compare_action_row.pack_forget()
+        self._update_compare_control_visibility()
+        self._on_mode_change()
 
     def _set_menu_entry_state(self, menu_ref, state):
         if menu_ref is None:

@@ -16,7 +16,7 @@ __email__ = APP_EMAIL
 class ImageComparer(CropMixin, SessionMixin, AnnotationMixin, ViewerMixin, UIBuilderMixin):
     def __init__(self, root):
         self.root = root
-        self.root.title("MSSL thin-film filter inspector")
+        self.root.title("MSSL FOCUS - Filter Optical Characterisation Utility Software")
         self.root.geometry("1400x900")
         self.root.configure(bg="#2b2b2b")
         self._set_app_icon()

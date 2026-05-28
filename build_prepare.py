@@ -78,12 +78,12 @@ VSVersionInfo(
       [StringTable(
         u'040904B0',
         [StringStruct(u'CompanyName', u'UCL MSSL'),
-        StringStruct(u'FileDescription', u'MSSL Filter Inspector'),
+        StringStruct(u'FileDescription', u'MSSL FOCUS - Filter Optical Characterisation Utility Software'),
         StringStruct(u'FileVersion', u'{ver_str}'),
-        StringStruct(u'InternalName', u'mssl_filter_inspector'),
+        StringStruct(u'InternalName', u'mssl_focus'),
         StringStruct(u'LegalCopyright', u'\\xa9 James McKevitt, UCL MSSL'),
-        StringStruct(u'OriginalFilename', u'mssl_filter_inspector.exe'),
-        StringStruct(u'ProductName', u'MSSL Filter Inspector'),
+        StringStruct(u'OriginalFilename', u'mssl_focus.exe'),
+        StringStruct(u'ProductName', u'MSSL FOCUS'),
         StringStruct(u'ProductVersion', u'{ver_str}')])
       ]),
     VarFileInfo([VarStruct(u'Translation', [0x0409, 1200])])

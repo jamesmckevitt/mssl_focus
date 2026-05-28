@@ -95,7 +95,7 @@ class CropMixin:
             font = ImageFont.load_default(size=font_size)
         except TypeError:
             font = ImageFont.load_default()
-        text = f"MSSL Filter Inspector v{APP_VERSION}  |  {datetime.date.today().isoformat()}"
+        text = f"MSSL FOCUS v{APP_VERSION}  |  {datetime.date.today().isoformat()}"
         drw = ImageDraw.Draw(img)
         bb = drw.textbbox((0, 0), text, font=font)
         tw = bb[2] - bb[0]

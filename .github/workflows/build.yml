@@ -17,10 +17,10 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux
-            artifact: dist/mssl_filter_inspector
+            artifact: dist/mssl_focus
           - os: windows-latest
             label: windows
-            artifact: dist/mssl_filter_inspector.exe
+            artifact: dist/mssl_focus.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -49,7 +49,7 @@ jobs:
         run: >
           pyinstaller
           --onefile
-          --name mssl_filter_inspector
+          --name mssl_focus
           --hidden-import tkinter
           --hidden-import tkinter.ttk
           --collect-all rawpy
@@ -58,7 +58,7 @@ jobs:
           --add-data "app.ico:."
           --add-data "app.png:."
           --icon app.png
-          filter_inspector.py
+          mssl_focus.py
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -66,7 +66,7 @@ jobs:
           pyinstaller
           --onefile
           --windowed
-          --name mssl_filter_inspector
+          --name mssl_focus
           --hidden-import tkinter
           --hidden-import tkinter.ttk
           --collect-all rawpy
@@ -76,7 +76,7 @@ jobs:
           --add-data "app.png;."
           --icon app.ico
           --version-file file_version_info.txt
-          filter_inspector.py
+          mssl_focus.py
 
       # Tag push -> create/update the GitHub Release and attach the binary
       - name: Publish to GitHub Release
@@ -91,6 +91,6 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: mssl_filter_inspector_${{ matrix.label }}
+          name: mssl_focus_${{ matrix.label }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error

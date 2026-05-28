@@ -1,4 +1,8 @@
-# MSSL Thin-Film Filter Inspector
+# MSSL FOCUS
+
+**Filter Optical Characterisation Utility Software**
+
+Developed at the UCL Mullard Space Science Laboratory (MSSL).
 
 A desktop tool for comparing and annotating pairs of thin-film optical filter images side-by-side or as a blended overlay. Tools for alignment, annotation, crop export, and session save/load.
 
@@ -8,8 +12,8 @@ No Python required, the executables are fully self-contained.
 
 | Platform | Download |
 |----------|----------|
-| Windows  | [![Download for Windows](https://img.shields.io/github/v/release/jamesmckevitt/solc_filter_inspector?label=Download%20%28Windows%29&color=0078D4&logoColor=white)](https://github.com/jamesmckevitt/solc_filter_inspector/releases/latest/download/mssl_filter_inspector.exe) |
-| Linux    | [![Download for Linux](https://img.shields.io/github/v/release/jamesmckevitt/solc_filter_inspector?label=Download%20%28Linux%29&color=FCC624&logoColor=black)](https://github.com/jamesmckevitt/solc_filter_inspector/releases/latest/download/mssl_filter_inspector) |
+| Windows  | [![Download for Windows](https://img.shields.io/github/v/release/jamesmckevitt/mssl_focus?label=Download%20%28Windows%29&color=0078D4&logoColor=white)](https://github.com/jamesmckevitt/mssl_focus/releases/latest/download/mssl_focus.exe) |
+| Linux    | [![Download for Linux](https://img.shields.io/github/v/release/jamesmckevitt/mssl_focus?label=Download%20%28Linux%29&color=FCC624&logoColor=black)](https://github.com/jamesmckevitt/mssl_focus/releases/latest/download/mssl_focus) |
 
 > **Note:** This software is developed in Linux and the executable for Windows is tested.
 

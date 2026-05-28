@@ -2,7 +2,7 @@
 
 **Filter Optical Characterisation Utility Software**
 
-Developed at the UCL Mullard Space Science Laboratory (MSSL).
+Developed at UCL Mullard Space Science Laboratory (MSSL).
 
 A desktop tool for comparing and annotating pairs of thin-film optical filter images side-by-side or as a blended overlay. Tools for alignment, annotation, crop export, and session save/load.
 
@@ -26,3 +26,9 @@ No Python required, the executables are fully self-contained.
 - Brightness / contrast / blacks / whites adjustment per image
 - Crop export - select a canvas region to export a high-resolution side-by-side PNG
 - Session save/load - persist all settings, alignment, and annotations to a `.json` file
+
+## Access and Licensing
+
+This software is copyright (c) 2026 James McKevitt, UCL Mullard Space Science Laboratory. All rights reserved.
+
+It is intended for internal use at UCL MSSL. For access or enquiries, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).

@@ -45,6 +45,7 @@ jobs:
         run: python build_prepare.py "${{ github.ref_name }}"
 
       - name: Inject license module
+        shell: bash
         env:
           LICENSE_MODULE: ${{ secrets.LICENSE_MODULE }}
         run: |

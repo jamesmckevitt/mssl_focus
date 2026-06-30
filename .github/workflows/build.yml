@@ -44,6 +44,13 @@ jobs:
       - name: Prepare build files (icon, version info, _version.txt)
         run: python build_prepare.py "${{ github.ref_name }}"
 
+      - name: Inject license module
+        env:
+          LICENSE_MODULE: ${{ secrets.LICENSE_MODULE }}
+        run: |
+          mkdir -p src
+          echo "$LICENSE_MODULE" > src/license.py
+
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: >

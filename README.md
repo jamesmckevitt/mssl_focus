@@ -31,4 +31,30 @@ No Python required, the executables are fully self-contained.
 
 This software is copyright (c) 2026 James McKevitt, UCL Mullard Space Science Laboratory. All rights reserved.
 
-It is intended for internal use at UCL MSSL. For access or enquiries, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).
+MSSL FOCUS requires a valid license file (`license.dat`) to run. On startup you will be asked to locate your license file, or enter a master password.
+
+To request a license, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).
+
+### Developer notes
+
+Generate a license file using the private `keygen.py` script:
+```bash
+python keygen.py user@mssl.ucl.ac.uk 2027-01-15
+```
+
+The shared HMAC secret and master password hash must match between `src/license.py` and `keygen.py`.
+
+To update the master password hash:
+```bash
+python -c "import hashlib; print(hashlib.sha256(b'your-new-password').hexdigest())"
+```
+Then update `_MASTER_HASH` in `src/license.py`.
+
+The `LICENSE_MODULE` repository secret must contain the full contents of `src/license.py`.
+
+### Running from source (local development)
+
+The software can be run directly from source, when `src/license.py` is present, using:
+```bash
+python -m src
+```

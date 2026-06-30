@@ -14,3 +14,5 @@ __pycache__/
 *.pyc
 *.arw
 *.ARW
+src/license.py
+keygen.py

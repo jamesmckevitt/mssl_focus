@@ -35,23 +35,6 @@ MSSL FOCUS requires a valid license file (`license.dat`) to run. On startup you 
 
 To request a license, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).
 
-### Developer notes
-
-Generate a license file using the private `keygen.py` script:
-```bash
-python keygen.py user@mssl.ucl.ac.uk 2027-01-15
-```
-
-The shared HMAC secret and master password hash must match between `src/license.py` and `keygen.py`.
-
-To update the master password hash:
-```bash
-python -c "import hashlib; print(hashlib.sha256(b'your-new-password').hexdigest())"
-```
-Then update `_MASTER_HASH` in `src/license.py`.
-
-The `LICENSE_MODULE` repository secret must contain the full contents of `src/license.py`.
-
 ### Running from source (local development)
 
 The software can be run directly from source, when `src/license.py` is present, using:

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mssl_focus"
+version = "0.0.0"
+description = "Filter Optical Characterisation Utility Software"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  {name = "James McKevitt", email = "jm2@mssl.ucl.ac.uk"},
+]
+keywords = ["filter", "optical", "characterisation", "imaging"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: Other/Proprietary License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+dependencies = [
+  "numpy>=2.4",
+  "Pillow>=12.0",
+  "rawpy>=0.27",
+  "opencv-python-headless>=4.11",
+]
+
+[project.optional-dependencies]
+build = [
+  "pyinstaller>=6.0",
+]
+
+[project.urls]
+Repository = "https://github.com/jamesmckevitt/mssl_focus"
+
+[tool.setuptools.packages.find]
+where = ["src"]

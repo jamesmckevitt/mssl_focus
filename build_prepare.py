@@ -9,8 +9,12 @@ Writes:
   app.ico                -- application icon (multi-size ICO via Pillow)
   app.png                -- application icon (PNG for Linux/runtime use)
   file_version_info.txt  -- PyInstaller Windows VERSIONINFO resource
+
+Mutates:
+  pyproject.toml         -- stamps project.version with the clean version string
 """
 
+import pathlib
 import re
 import sys
 
@@ -92,6 +96,24 @@ VSVersionInfo(
     with open("file_version_info.txt", "w", encoding="utf-8") as fh:
         fh.write(vinfo)
     print("Generated file_version_info.txt")
+
+    # ------------------------------------------------------------------ #
+    # pyproject.toml  (stamp project.version with the clean version string)
+    # ------------------------------------------------------------------ #
+    toml_path = pathlib.Path("pyproject.toml")
+    if toml_path.exists():
+        content = toml_path.read_text(encoding="utf-8")
+        content, count = re.subn(
+            r'^version\s*=\s*"[^"]*"',
+            f'version = "{ver_str}"',
+            content,
+            flags=re.MULTILINE,
+        )
+        if count:
+            toml_path.write_text(content, encoding="utf-8")
+            print(f"Stamped pyproject.toml with version: {ver_str}")
+        else:
+            print("WARNING: could not find version string in pyproject.toml")
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pillow numpy pyinstaller rawpy opencv-python-headless
+          pip install -e .[build]
 
       - name: Prepare build files (icon, version info, _version.txt)
         run: python build_prepare.py "${{ github.ref_name }}"
@@ -86,12 +86,14 @@ jobs:
           --version-file file_version_info.txt
           mssl_focus.py
 
-      # Tag push -> create/update the GitHub Release and attach the binary
+      # Tag push -> create/update the GitHub Release and attach the binary + pyproject.toml
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact }}
+          files: |
+            ${{ matrix.artifact }}
+            pyproject.toml
           generate_release_notes: true
 
       # Manual dispatch -> save as a workflow artifact so can still test builds

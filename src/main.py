@@ -53,7 +53,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 try:
-    from .license import check_license
+    from . import license as license_backend
 except ImportError:
     root = tk.Tk()
     root.withdraw()
@@ -68,10 +68,11 @@ except ImportError:
     sys.exit(1)
 
 from .app import ImageComparer
+from .license_flow import check_license
 
 
 def run_app():
-    check_license()
+    check_license(license_backend)
     root = tk.Tk()
     ImageComparer(root)
     root.mainloop()

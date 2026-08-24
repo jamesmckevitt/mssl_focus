@@ -1,4 +1,36 @@
 import sys
+
+
+def _enable_windows_dpi_awareness():
+    """Opt in to native-resolution rendering before creating any Tk windows."""
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+
+    try:
+        # Windows 10 1703+: sharp rendering when a window changes monitors too.
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        # Windows 8.1 fallback.
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        # Windows Vista/7 fallback.
+        ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
+_enable_windows_dpi_awareness()
+
 import tkinter as tk
 from tkinter import messagebox
 

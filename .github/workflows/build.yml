@@ -83,6 +83,7 @@ jobs:
           --add-data "app.ico;."
           --add-data "app.png;."
           --icon app.ico
+          --manifest windows.manifest
           --version-file file_version_info.txt
           mssl_focus.py
 

@@ -1,5 +1,7 @@
 import sys
 
+_WINDOWS_APP_USER_MODEL_ID = "UCL.MSSL.MSSLFocus"
+
 
 def _enable_windows_dpi_awareness():
     """Opt in to native-resolution rendering before creating any Tk windows."""
@@ -29,7 +31,23 @@ def _enable_windows_dpi_awareness():
         pass
 
 
+def _set_windows_app_user_model_id():
+    """Give Windows a stable identity for taskbar grouping and icon lookup."""
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            _WINDOWS_APP_USER_MODEL_ID
+        )
+    except (AttributeError, OSError):
+        pass
+
+
 _enable_windows_dpi_awareness()
+_set_windows_app_user_model_id()
 
 import tkinter as tk
 from tkinter import messagebox

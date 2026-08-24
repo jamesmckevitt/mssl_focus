@@ -1206,19 +1206,42 @@ class AnnotationMixin:
             ico_path = os.path.join(base_dir, "app.ico")
             png_path = os.path.join(base_dir, "app.png")
 
-            if os.path.exists(ico_path):
+            if sys.platform == "win32" and os.path.isfile(ico_path):
+                icon_applied = False
                 try:
+                    # Set this window explicitly so the title bar and taskbar do
+                    # not fall back to Tk's feather icon.
+                    self.root.iconbitmap(ico_path)
+                    icon_applied = True
+                except tk.TclError:
+                    pass
+                try:
+                    # Also make the ICO the default for dialogs and Toplevels.
                     self.root.iconbitmap(default=ico_path)
-                except Exception:
+                    icon_applied = True
+                except tk.TclError:
                     pass
 
-            if os.path.exists(png_path):
+                if icon_applied:
+                    # Reapply once Tk has finished mapping the native window.
+                    def reapply_icon():
+                        try:
+                            self.root.iconbitmap(ico_path)
+                            self.root.iconbitmap(default=ico_path)
+                        except tk.TclError:
+                            pass
+
+                    self.root.after_idle(reapply_icon)
+                    return
+
+            if os.path.isfile(png_path):
                 try:
-                    photo = ImageTk.PhotoImage(Image.open(png_path))
+                    with Image.open(png_path) as image:
+                        photo = ImageTk.PhotoImage(image.copy())
                     self.root.iconphoto(True, photo)
                     self._icon_photo = photo
                     return
-                except Exception:
+                except (OSError, tk.TclError):
                     pass
 
             sz = 64

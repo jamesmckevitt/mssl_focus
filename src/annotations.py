@@ -1,13 +1,12 @@
 import math
-import os
-import sys
 import tkinter as tk
 from tkinter import colorchooser, messagebox, simpledialog
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageTk
+from PIL import Image, ImageEnhance
 
 from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL, _PRESET_COLOURS
+from .window_icon import set_app_icon
 
 
 class AnnotationMixin:
@@ -1201,66 +1200,7 @@ class AnnotationMixin:
             self._schedule_render()
 
     def _set_app_icon(self):
-        try:
-            base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
-            ico_path = os.path.join(base_dir, "app.ico")
-            png_path = os.path.join(base_dir, "app.png")
-
-            if sys.platform == "win32" and os.path.isfile(ico_path):
-                icon_applied = False
-                try:
-                    # Set this window explicitly so the title bar and taskbar do
-                    # not fall back to Tk's feather icon.
-                    self.root.iconbitmap(ico_path)
-                    icon_applied = True
-                except tk.TclError:
-                    pass
-                try:
-                    # Also make the ICO the default for dialogs and Toplevels.
-                    self.root.iconbitmap(default=ico_path)
-                    icon_applied = True
-                except tk.TclError:
-                    pass
-
-                if icon_applied:
-                    # Reapply once Tk has finished mapping the native window.
-                    def reapply_icon():
-                        try:
-                            self.root.iconbitmap(ico_path)
-                            self.root.iconbitmap(default=ico_path)
-                        except tk.TclError:
-                            pass
-
-                    self.root.after_idle(reapply_icon)
-                    return
-
-            if os.path.isfile(png_path):
-                try:
-                    with Image.open(png_path) as image:
-                        photo = ImageTk.PhotoImage(image.copy())
-                    self.root.iconphoto(True, photo)
-                    self._icon_photo = photo
-                    return
-                except (OSError, tk.TclError):
-                    pass
-
-            sz = 64
-            m = 5
-            img = Image.new("RGBA", (sz, sz), (255, 255, 255, 255))
-            d = ImageDraw.Draw(img)
-            x0, y0 = m, m
-            x1, y1 = sz - m - 1, sz - m - 1
-            d.rectangle([x0, y0, x1, y1], fill="white", outline="black", width=2)
-            for frac in (1 / 3, 2 / 3):
-                x = round(x0 + frac * (x1 - x0))
-                y = round(y0 + frac * (y1 - y0))
-                d.line([(x, y0), (x, y1)], fill="black", width=2)
-                d.line([(x0, y), (x1, y)], fill="black", width=2)
-            photo = ImageTk.PhotoImage(img)
-            self.root.iconphoto(True, photo)
-            self._icon_photo = photo
-        except Exception:
-            pass
+        set_app_icon(self.root)
 
     def _apply_adjustments(self, img, idx, adj_vars=None):
         if adj_vars is None:

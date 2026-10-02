@@ -6,6 +6,7 @@ from tkinter import ttk
 
 from . import theme
 from .annotations import PRESET_COLOURS
+from .imaging import RAW_NOISE_LEVELS, is_raw
 from .help import show_about, show_guide, show_shortcuts
 from .pair import BACKLIT, FRONTLIT
 from .theme import Tooltip
@@ -80,6 +81,10 @@ class UIBuilderMixin:
         self.adjust_readouts = {key: tk.StringVar() for key, *_rest in ADJUST_SLIDERS}
         self.nr_vars = {"amount": tk.IntVar(), "color": tk.IntVar(), "edge": tk.IntVar()}
         self.nr_aggressive_var = tk.BooleanVar()
+        self.raw_exposure_var = tk.StringVar(value="0.0")
+        self.raw_noise_var = tk.StringVar(value="Standard")
+        self.detect_sensitivity_var = tk.StringVar(value="Normal")
+        self.detect_new_only_var = tk.BooleanVar(value=False)
 
         self.hint_title_var = tk.StringVar()
         self.hint_text_var = tk.StringVar()
@@ -128,6 +133,8 @@ class UIBuilderMixin:
         edit_menu.add_command(label="Undo", accelerator="Ctrl+Z", command=self.undo)
         edit_menu.add_command(label="Redo", accelerator="Ctrl+Y", command=self.redo)
         edit_menu.add_separator()
+        edit_menu.add_command(label="Find pinholes...", accelerator="D",
+                              command=lambda: self.set_tool("detect"))
         edit_menu.add_command(label="Copy markers from reference row...", command=self.copy_reference_annotations)
         edit_menu.add_command(label="Clear all markers...", command=self.clear_annotations)
         menubar.add_cascade(label="Edit", menu=edit_menu)
@@ -261,6 +268,22 @@ class UIBuilderMixin:
                                      command=self.apply_tool_points, takefocus=False)
         self.hint_done = ttk.Button(self.hint_actions, text="Done", command=lambda: self.set_tool("pan"),
                                     takefocus=False)
+        self.hint_sensitivity_label = ttk.Label(self.hint_actions, text="Sensitivity", style="Hint.TLabel")
+        self.hint_sensitivity = ttk.Combobox(self.hint_actions, textvariable=self.detect_sensitivity_var,
+                                             values=["Low", "Normal", "High"], state="readonly", width=8,
+                                             takefocus=False)
+        Tooltip(self.hint_sensitivity,
+                "Low: only clear, bright spots.\nHigh: also faint spots, with more false alarms.")
+        self.hint_new_only = ttk.Checkbutton(self.hint_actions, text="Only new since reference",
+                                             variable=self.detect_new_only_var, style="Hint.TCheckbutton",
+                                             takefocus=False, command=self._on_new_only_toggle)
+        self.hint_accept = ttk.Button(self.hint_actions, text="Accept", style="Accent.TButton",
+                                      command=self.review_accept, takefocus=False)
+        self.hint_skip = ttk.Button(self.hint_actions, text="Skip", command=self.review_skip, takefocus=False)
+        self.hint_reject = ttk.Button(self.hint_actions, text="Not a pinhole", command=self.review_reject,
+                                      takefocus=False)
+        self.hint_accept_all = ttk.Button(self.hint_actions, text="Accept all", command=self.review_accept_all,
+                                          takefocus=False)
 
         self.hint_label = ttk.Label(bar, textvariable=self.hint_text_var, style="Hint.TLabel",
                                     justify=tk.LEFT, anchor=tk.W)
@@ -268,13 +291,24 @@ class UIBuilderMixin:
         self.hint_label.bind("<Configure>",
                              lambda e: self.hint_label.configure(wraplength=max(200, e.width - self.px(8))))
 
-    def _set_hint_buttons(self, show_points, can_apply):
-        for widget in (self.hint_scale_check, self.hint_undo_point, self.hint_clear_points,
-                       self.hint_apply, self.hint_done):
+    def _on_new_only_toggle(self):
+        self._candidate_index = 0
+        self._show_candidate()
+
+    def _set_hint_buttons(self, kind, can_apply):
+        for widget in self.hint_actions.winfo_children():
             widget.pack_forget()
         tool = self.tool_var.get()
-        if show_points:
-            pad = self.px(3)
+        pad = self.px(3)
+        if kind == "detect":
+            self.hint_sensitivity_label.pack(side=tk.LEFT, padx=(pad, self.px(6)))
+            self.hint_sensitivity.pack(side=tk.LEFT, padx=(0, self.px(10)))
+        elif kind == "review":
+            if self._candidate_summary.get("with_reference"):
+                self.hint_new_only.pack(side=tk.LEFT, padx=(pad, self.px(10)))
+            for widget in (self.hint_accept, self.hint_skip, self.hint_reject, self.hint_accept_all):
+                widget.pack(side=tk.LEFT, padx=pad)
+        if kind == "points":
             self.hint_scale_check.pack(side=tk.LEFT, padx=(pad, self.px(10)))
             self.hint_undo_point.pack(side=tk.LEFT, padx=pad)
             self.hint_clear_points.pack(side=tk.LEFT, padx=pad)
@@ -571,6 +605,8 @@ class UIBuilderMixin:
         line = self._row(body, 6)
         ttk.Button(line, text="Place markers", style="Accent.TButton", takefocus=False,
                    command=lambda: self.set_tool("annotate")).pack(side=tk.LEFT)
+        ttk.Button(line, text="Find pinholes...", takefocus=False,
+                   command=lambda: self.set_tool("detect")).pack(side=tk.LEFT, padx=self.px(6))
         ttk.Button(line, text="Clear all...", style="Danger.TButton", takefocus=False,
                    command=self.clear_annotations).pack(side=tk.RIGHT)
         self.copy_reference_button = ttk.Button(body, text="Copy markers from reference row...",
@@ -593,7 +629,25 @@ class UIBuilderMixin:
         line = self._row(body, 4)
         ttk.Button(line, text="Reset", takefocus=False, command=self.reset_adjustments).pack(side=tk.LEFT)
 
-        self._subheading(body, "Noise reduction")
+        self._subheading(body, "Camera RAW development")
+        self.raw_frame = ttk.Frame(body)
+        self.raw_frame.pack(fill=tk.X)
+        line = self._row(self.raw_frame)
+        ttk.Label(line, text="Exposure (EV)").pack(side=tk.LEFT)
+        ttk.Spinbox(line, textvariable=self.raw_exposure_var, from_=-4, to=6, increment=0.5, width=6,
+                    format="%.1f", command=self._on_raw_settings).pack(side=tk.LEFT, padx=self.px(8))
+        line = self._row(self.raw_frame)
+        ttk.Label(line, text="Noise reduction").pack(side=tk.LEFT)
+        box = ttk.Combobox(line, textvariable=self.raw_noise_var, state="readonly", width=10, takefocus=False,
+                           values=[name.capitalize() for name in RAW_NOISE_LEVELS])
+        box.pack(side=tk.LEFT, padx=self.px(8))
+        box.bind("<<ComboboxSelected>>", lambda _e: self._on_raw_settings())
+        line = self._row(self.raw_frame, 4)
+        ttk.Button(line, text="Develop again", takefocus=False,
+                   command=self._redevelop_from_panel).pack(side=tk.LEFT)
+        self.raw_note = self._note(body, "")
+
+        self._subheading(body, "Extra noise reduction (any image)")
         for key, label in (("amount", "Amount"), ("color", "Colour"), ("edge", "Edges")):
             self._slider(body, label, self.nr_vars[key], 0, 100,
                          lambda v, k=key: self._on_nr_changed(k, v))
@@ -686,6 +740,16 @@ class UIBuilderMixin:
             for key, var in self.nr_vars.items():
                 var.set(target.nr[idx][key])
             self.nr_aggressive_var.set(target.nr[idx]["aggressive"])
+            raw = is_raw(target.paths[idx])
+            self.raw_exposure_var.set(f"{target.develop[idx]['exposure']:.1f}")
+            self.raw_noise_var.set(target.develop[idx]["noise"].capitalize())
+            self._set_children_state(self.raw_frame, raw)
+            self.raw_note.configure(
+                text=("Backlit RAW frames are developed for dark-field viewing: the noise floor is set to "
+                      "black and bright points are stretched.  Raise Exposure if pinholes look dim."
+                      if idx == BACKLIT else
+                      "RAW files are developed with the camera's white balance and cropped to its image area.")
+                if raw else "Only for camera RAW files (ARW, NEF, CR2, DNG, ...).  This image is not one.")
         finally:
             self._syncing = False
         self._update_undo_buttons()
@@ -779,6 +843,21 @@ class UIBuilderMixin:
         for name, var in self.nr_vars.items():
             settings[name] = int(var.get())
         settings["aggressive"] = bool(self.nr_aggressive_var.get())
+
+    def _on_raw_settings(self):
+        if self._syncing:
+            return
+        row, idx = self._adjust_target()
+        try:
+            exposure = max(-4.0, min(6.0, float(self.raw_exposure_var.get())))
+        except ValueError:
+            exposure = 0.0
+        self.pairs[row].develop[idx] = {"exposure": exposure, "noise": self.raw_noise_var.get().lower()}
+
+    def _redevelop_from_panel(self):
+        self._on_raw_settings()
+        row, idx = self._adjust_target()
+        self.redevelop_image(idx, row)
 
     def _apply_nr_from_panel(self):
         row, idx = self._adjust_target()

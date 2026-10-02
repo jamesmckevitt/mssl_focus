@@ -26,13 +26,124 @@ IMAGE_FILETYPES = [
 CANVAS_BACKGROUND = (24, 24, 24)
 
 
-def open_image(path):
-    """Open a standard or camera RAW image as a fully loaded 8-bit PIL image."""
-    if os.path.splitext(path)[1].lower() in RAW_EXTENSIONS:
-        import rawpy
-        with rawpy.imread(path) as raw:
-            rgb = raw.postprocess(use_camera_wb=True)
-        return Image.fromarray(rgb)
+def is_raw(path):
+    return bool(path) and os.path.splitext(path)[1].lower() in RAW_EXTENSIONS
+
+
+# --------------------------------------------------------------------------- #
+# Camera RAW development
+# --------------------------------------------------------------------------- #
+
+RAW_DEVELOP_DEFAULTS = {"exposure": 0.0, "noise": "standard"}
+
+# name: (colour-noise blur sigma, brightness-noise blur sigma, black point in noise sigmas)
+RAW_NOISE_LEVELS = {
+    "off": (0.0, 0.0, 0.0),
+    "light": (1.5, 0.0, 2.0),
+    "standard": (2.5, 0.0, 3.0),
+    "strong": (3.0, 0.8, 4.0),
+}
+
+# A frame counts as dark-field (backlit through an opaque filter) when its
+# typical pixel is this close to black, as a fraction of full scale.
+DARK_FIELD_MEDIAN = 0.03
+
+
+def _srgb_curve(linear):
+    linear = np.clip(linear, 0.0, 1.0, out=linear)
+    low = linear <= 0.0031308
+    out = np.empty_like(linear)
+    out[low] = linear[low] * 12.92
+    np.power(linear, 1.0 / 2.4, out=linear)
+    out[~low] = 1.055 * linear[~low] - 0.055
+    return out
+
+
+def develop_raw(path, dark_field=False, exposure=0.0, noise="standard"):
+    """Develop a camera RAW file into an 8-bit RGB image.
+
+    The frame is cropped to the camera's own image area, so it matches the
+    pixel grid of files converted with the manufacturer's software.
+
+    ``dark_field`` asks for the treatment suited to backlit frames, where a
+    few bright points sit on an otherwise black, noisy background: the black
+    point is set just above the measured noise floor and the remaining range
+    is stretched so those points are clearly visible.  It only takes effect
+    if the frame really is dark.  ``exposure`` is an extra brightening in
+    stops on top of that.
+    """
+    import cv2
+    import rawpy
+
+    chroma_sigma, luma_sigma, black_sigmas = RAW_NOISE_LEVELS.get(noise, RAW_NOISE_LEVELS["standard"])
+    with rawpy.imread(path) as raw:
+        linear = raw.postprocess(use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1))
+        sizes = raw.sizes
+        left = int(getattr(sizes, "crop_left_margin", 0) or 0)
+        top = int(getattr(sizes, "crop_top_margin", 0) or 0)
+        crop_w = int(getattr(sizes, "crop_width", 0) or 0)
+        crop_h = int(getattr(sizes, "crop_height", 0) or 0)
+        flip = int(getattr(sizes, "flip", 0) or 0)
+    margins = (0, 0)
+    if flip == 0 and 0 < crop_w and 0 < crop_h and left + crop_w <= linear.shape[1] and top + crop_h <= linear.shape[0]:
+        linear = linear[top:top + crop_h, left:left + crop_w]
+        margins = (left, top)
+
+    linear = linear.astype(np.float32)
+    linear /= 65535.0
+    luma = linear @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    sample = luma[::3, ::3]
+    median = float(np.median(sample))
+    sigma = float(np.median(np.abs(sample - median)) * 1.4826)
+    is_dark = dark_field and median < DARK_FIELD_MEDIAN
+
+    if chroma_sigma > 0:
+        # Colour speckle is the most visible noise and carries no detail worth keeping.
+        chroma = linear - luma[:, :, None]
+        smooth = cv2.GaussianBlur(chroma, (0, 0), chroma_sigma if is_dark else chroma_sigma * 0.5)
+        if is_dark:
+            # Keep the true colour of anything standing clearly above the noise.
+            keep = np.clip((luma - (median + 3.0 * sigma)) / max(6.0 * sigma, 1e-6), 0.0, 1.0)
+            chroma -= smooth
+            chroma *= keep[:, :, None]
+            smooth += chroma
+        if luma_sigma > 0:
+            luma = cv2.GaussianBlur(luma, (0, 0), luma_sigma)
+        linear = smooth
+        linear += luma[:, :, None]
+    elif luma_sigma > 0:
+        linear = cv2.GaussianBlur(linear, (0, 0), luma_sigma)
+
+    black = 0.0
+    gain = 1.0
+    if is_dark:
+        black = median + black_sigmas * sigma
+        # Stretch so genuine features are bright; the very brightest 0.01% may clip.
+        peak = float(np.percentile(sample, 99.99)) - black
+        gain = float(np.clip(1.6 / max(peak, 1e-6), 1.0, 64.0))
+    gain *= 2.0 ** float(exposure)
+
+    linear -= black
+    linear *= gain
+    out = _srgb_curve(linear)
+    out *= 255.0
+    out += 0.5
+    image = Image.fromarray(out.astype(np.uint8))
+    image.info["raw_crop_margins"] = margins
+    return image
+
+
+def open_image(path, develop=None, dark_field=False):
+    """Open a standard or camera RAW image as a fully loaded 8-bit PIL image.
+
+    ``develop`` holds the RAW development settings (see ``RAW_DEVELOP_DEFAULTS``);
+    it is ignored for ordinary image files.
+    """
+    if is_raw(path):
+        settings = dict(RAW_DEVELOP_DEFAULTS)
+        settings.update(develop or {})
+        return develop_raw(path, dark_field=dark_field, exposure=settings["exposure"],
+                           noise=settings["noise"])
 
     with Image.open(path) as handle:
         handle.load()

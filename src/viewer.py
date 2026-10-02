@@ -1,5 +1,6 @@
 """View geometry, rendering, image loading and navigation."""
 
+import gc
 import math
 import os
 import queue
@@ -12,7 +13,7 @@ from PIL import Image, ImageTk
 from . import geometry as geo
 from . import theme
 from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL
-from .imaging import IMAGE_FILETYPES, Pyramid, blank_frame, denoise, open_image
+from .imaging import IMAGE_FILETYPES, Pyramid, blank_frame, denoise, is_raw, open_image
 from .pair import BACKLIT, FRONTLIT
 from .session import describe_location
 
@@ -34,8 +35,8 @@ class Pane:
         self.image_item = canvas.create_image(0, 0, anchor=tk.NW, tags="img")
 
 
-def _load_one(path, nr):
-    base = open_image(path)
+def _load_one(path, nr, develop, dark_field):
+    base = open_image(path, develop=develop, dark_field=dark_field)
     shown = base
     if nr and nr.get("amount", 0) > 0:
         shown = denoise(base, nr["amount"], nr["color"], nr["edge"], nr["aggressive"])
@@ -324,6 +325,12 @@ class ViewerMixin:
         except tk.TclError:
             pass
 
+        # Tk objects must only ever be finalised on the UI thread.  A garbage
+        # collection that happened to run inside the worker would try to do so
+        # there and stall, so collect now and hold collection off until done.
+        gc.collect()
+        gc.disable()
+
         def worker():
             for i, (description, func) in enumerate(steps):
                 messages.put(("step", i, description))
@@ -354,6 +361,7 @@ class ViewerMixin:
             except tk.TclError:
                 pass
             dialog.destroy()
+            gc.enable()
             self._busy = False
             on_done(results)
 
@@ -361,24 +369,26 @@ class ViewerMixin:
         self.root.after(40, poll)
 
     def _load_images(self, jobs, on_done, title="Loading images"):
-        """Load ``jobs`` -- a list of ``(key, path, nr_settings_or_None)`` -- in the background.
+        """Load ``jobs`` -- a list of ``((row, idx), path, nr_settings, raw_develop_settings)``,
+        either setting may be ``None`` -- in the background.
 
         ``on_done(loaded, errors)`` receives ``{key: (path, base_image, pyramid)}``
         and ``{key: message}``.
         """
         steps = []
-        for _key, path, nr in jobs:
+        for (_row, idx), path, nr, develop in jobs:
             size_mb = ""
             try:
                 size_mb = f"  ({os.path.getsize(path) / 1e6:.0f} MB)"
             except OSError:
                 pass
-            steps.append((f"Loading {os.path.basename(path)}{size_mb}",
-                          lambda p=path, n=nr: _load_one(p, n)))
+            verb = "Developing" if is_raw(path) else "Loading"
+            steps.append((f"{verb} {os.path.basename(path)}{size_mb}",
+                          lambda p=path, n=nr, d=develop, dark=(idx == BACKLIT): _load_one(p, n, d, dark)))
 
         def finished(results):
             loaded, errors = {}, {}
-            for (key, path, _nr), result in zip(jobs, results):
+            for (key, path, _nr, _develop), result in zip(jobs, results):
                 if isinstance(result, Exception):
                     errors[key] = f"{path}\n{type(result).__name__}: {result}"
                 else:
@@ -435,7 +445,31 @@ class ViewerMixin:
                 f"{self._image_label(idx, row)} loaded: {os.path.basename(loaded_path)} "
                 f"({pyramid.size[0]} x {pyramid.size[1]} px)")
 
-        self._load_images([((row, idx), path, None)], finished)
+        self._load_images([((row, idx), path, None, self.pairs[row].develop[idx])], finished)
+
+    def redevelop_image(self, idx, row=CURRENT):
+        """Develop a RAW image again with the current exposure and noise settings."""
+        pair = self.pairs[row]
+        path = pair.paths[idx]
+        label = self._image_label(idx, row)
+        if not is_raw(path):
+            self.set_status(f"{label} is not a camera RAW file.")
+            return
+
+        def finished(loaded, errors):
+            self._report_load_errors("Develop RAW", errors)
+            if (row, idx) not in loaded or pair.paths[idx] != path:
+                return
+            _path, base, pyramid = loaded[(row, idx)]
+            pair.set_image(idx, path, base, pyramid)
+            self._mark_dirty()
+            self._schedule_render()
+            settings = pair.develop[idx]
+            self.set_status(f"{label} developed again: exposure {settings['exposure']:+.1f} EV, "
+                            f"noise reduction {settings['noise']}.")
+
+        self._load_images([((row, idx), path, pair.nr[idx], pair.develop[idx])], finished,
+                          title="Developing RAW")
 
     def remove_reference_row(self):
         if not self.pairs[REFERENCE].has_any_image():

@@ -5,7 +5,7 @@ import copy
 import re
 
 from . import geometry as geo
-from .imaging import build_lut
+from .imaging import RAW_DEVELOP_DEFAULTS, RAW_NOISE_LEVELS, build_lut
 
 BACKLIT = 0
 FRONTLIT = 1
@@ -41,6 +41,7 @@ class ImagePair:
         self.glob_rot = 0.0
         self.adjust = [dict(ADJUST_DEFAULTS), dict(ADJUST_DEFAULTS)]
         self.nr = [dict(NR_DEFAULTS), dict(NR_DEFAULTS)]
+        self.develop = [dict(RAW_DEVELOP_DEFAULTS), dict(RAW_DEVELOP_DEFAULTS)]   # camera RAW files only
         self.annotations = []
         self.colour_labels = {}
         self.label_prefixes = {}
@@ -181,6 +182,16 @@ class ImagePair:
                     "aggressive": bool(cfg.get("aggressive", False)),
                     "color": int(_as_float(cfg.get("color"), 50)),
                     "edge": int(_as_float(cfg.get("edge"), 100)),
+                }
+
+    def apply_develop_records(self, records):
+        for i in range(2):
+            self.develop[i] = dict(RAW_DEVELOP_DEFAULTS)
+            if records and i < len(records) and isinstance(records[i], dict):
+                noise = str(records[i].get("noise", RAW_DEVELOP_DEFAULTS["noise"])).lower()
+                self.develop[i] = {
+                    "exposure": max(-4.0, min(6.0, _as_float(records[i].get("exposure"), 0.0))),
+                    "noise": noise if noise in RAW_NOISE_LEVELS else RAW_DEVELOP_DEFAULTS["noise"],
                 }
 
     def snapshot(self):

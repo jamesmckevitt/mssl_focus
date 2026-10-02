@@ -369,3 +369,66 @@ def test_export_contains_both_rows_and_the_legend(app, tmp_path):
     # The marker ring (radius 20 px, red) is drawn around the feature.
     assert single.getpixel((int(marker_x + 20 - 2), int(marker_y))) == (255, 0, 0)
     assert single.getpixel((int(marker_x), int(marker_y)))[0] > 200   # the dot itself, untouched
+
+
+def test_found_pinholes_are_reviewed_one_by_one(app, tmp_path):
+    load_stage(app, make_stage(tmp_path / "s", DOTS))
+    app.set_tool("annotate")
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *DOTS[0]))   # already marked
+    app.set_tool("detect")
+    canvas = pane(app, 0, BACKLIT).canvas
+    drag(app, pane(app, 0, BACKLIT), (2, 2), (canvas.winfo_width() - 2, canvas.winfo_height() - 2))
+    wait_idle(app)
+    assert app.tool_var.get() == "review"
+    assert len(app._candidates) == len(DOTS) - 1, "the marked spot must not be offered again"
+    assert app._candidate_summary["marked"] == 1
+
+    first = dict(app._current_candidate())
+    app.review_accept()
+    wait_idle(app)
+    newest = app.pairs[0].annotations[-1]
+    assert (newest["img1_x"], newest["img1_y"]) == pytest.approx((first["x"], first["y"]))
+    assert newest["label"] == "P2"
+    app.review_reject()
+    app.review_skip()
+    wait_idle(app)
+    assert len(app._candidates) == len(DOTS) - 3
+    app._on_escape()
+    assert app.tool_var.get() == "pan" and app._candidates == []
+    assert len(app.pairs[0].annotations) == 2
+    app.undo()
+    assert len(app.pairs[0].annotations) == 1
+
+
+def test_new_pinholes_are_offered_first_when_a_reference_is_loaded(app, tmp_path):
+    back1 = (0.8, (0, 0))
+    stage1 = make_stage(tmp_path / "1_incoming" / "em9", DOTS[:3], back1, (0.8, (0, 0), 1.0))
+    load_stage(app, stage1)
+    app._write_session(str(stage1 / "session.json"))
+
+    back2 = (-1.0, (22, -14))
+    stage2 = make_stage(tmp_path / "2_shock" / "em9", DOTS, back2, (-1.0, (22, -14), 1.0))
+    app.new_session()
+    load_stage(app, stage2)
+    app.open_reference_session(str(stage1 / "session.json"))
+    wait_idle(app)
+    app.set_tool("align_rows")
+    for dot in DOTS[:3]:
+        click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *placed(dot, *back2)))
+        click(app, pane(app, 1, BACKLIT), *app.image_to_canvas(1, BACKLIT, *placed(dot, *back1)))
+    app.apply_tool_points()
+    wait_idle(app)
+
+    app.set_tool("detect")
+    canvas = pane(app, 0, BACKLIT).canvas
+    drag(app, pane(app, 0, BACKLIT), (2, 2), (canvas.winfo_width() - 2, canvas.winfo_height() - 2))
+    wait_idle(app)
+    assert app._candidate_summary["with_reference"]
+    assert app._candidate_summary["new"] == 2
+    flags = [c["in_reference"] for c in app._candidates]
+    assert flags == [False, False, True, True, True]
+    new_positions = sorted((round(c["x"]), round(c["y"])) for c in app._candidates[:2])
+    expected = sorted((round(x + 0.5), round(y + 0.5)) for x, y in (placed(d, *back2) for d in DOTS[3:]))
+    assert new_positions == pytest.approx(expected, abs=1)
+    app.detect_new_only_var.set(True)
+    assert len(app._review_candidates()) == 2

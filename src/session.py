@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import theme
-from .imaging import IMAGE_FILETYPES
+from .imaging import IMAGE_FILETYPES, is_raw
 from .metadata import APP_VERSION
 from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
 
@@ -108,9 +108,21 @@ def fill_pair_from_session(pair, session, reference=False):
     pair.apply_alignment_record(session.get(prefix + "alignment"))
     pair.apply_adjust_records(session.get(prefix + "adjustments"))
     pair.apply_nr_records(session.get(prefix + "noise_reduction"))
+    pair.apply_develop_records(session.get(prefix + "raw_develop"))
     pair.annotations = [normalise_annotation(a) for a in session.get(prefix + "annotations", [])]
     pair.colour_labels = dict(session.get(prefix + "colour_labels", {}))
     pair.label_prefixes = dict(session.get(prefix + "label_prefixes", {}))
+
+
+def shift_legacy_raw_markers(pair, session, base_image):
+    """Sessions from v1.x placed markers on the uncropped RAW frame; RAW files are now
+    cropped to the camera's image area, so move those markers by the crop margin."""
+    if int(_float(session.get("version"), 1)) >= SESSION_VERSION or not is_raw(pair.paths[BACKLIT]):
+        return
+    left, top = getattr(base_image, "info", {}).get("raw_crop_margins", (0, 0))
+    for ann in pair.annotations:
+        ann["img1_x"] -= left
+        ann["img1_y"] -= top
 
 
 def _float(value, default):
@@ -146,6 +158,7 @@ class SessionMixin:
             "align_pts_img2": [],
             "adjustments": [dict(a) for a in current.adjust],
             "noise_reduction": [dict(n) for n in current.nr],
+            "raw_develop": [dict(d) for d in current.develop],
             "compare_row_enabled": bool(self.show_reference_var.get() and reference.has_any_image()),
             "compare_image_paths": list(reference.paths),
             "compare_image_paths_rel": [relative_to(p, session_dir) for p in reference.paths],
@@ -158,6 +171,7 @@ class SessionMixin:
             },
             "compare_adjustments": [dict(a) for a in reference.adjust],
             "compare_noise_reduction": [dict(n) for n in reference.nr],
+            "compare_raw_develop": [dict(d) for d in reference.develop],
             "compare_annotations": [normalise_annotation(a) for a in reference.annotations],
             "compare_colour_labels": dict(reference.colour_labels),
             "compare_label": reference.label,
@@ -359,7 +373,7 @@ class SessionMixin:
         for n, image_path in enumerate(final):
             if image_path:
                 row, idx = divmod(n, 2)
-                jobs.append(((row, idx), image_path, new_pairs[row].nr[idx]))
+                jobs.append(((row, idx), image_path, new_pairs[row].nr[idx], new_pairs[row].develop[idx]))
 
         def finished(loaded, errors):
             if errors:
@@ -368,6 +382,8 @@ class SessionMixin:
                 return
             for (row, idx), (image_path, base, pyramid) in loaded.items():
                 new_pairs[row].set_image(idx, image_path, base, pyramid)
+                if idx == BACKLIT and row == 0:
+                    shift_legacy_raw_markers(new_pairs[row], session, base)
             if with_reference and not reference.label:
                 reference.label = describe_location(reference.paths[BACKLIT] or reference.paths[FRONTLIT])
             self._reset_state()
@@ -427,7 +443,7 @@ class SessionMixin:
         fill_pair_from_session(reference, session)
         reference.label = describe_location(path)
         reference.session_path = path
-        jobs = [((1, idx), image_path, reference.nr[idx])
+        jobs = [((1, idx), image_path, reference.nr[idx], reference.develop[idx])
                 for idx, image_path in enumerate(final) if image_path]
 
         def finished(loaded, errors):
@@ -436,6 +452,8 @@ class SessionMixin:
                 return
             for (_row, idx), (image_path, base, pyramid) in loaded.items():
                 reference.set_image(idx, image_path, base, pyramid)
+                if idx == BACKLIT:
+                    shift_legacy_raw_markers(reference, session, base)
             was_empty = not self.pairs[0].has_any_image()
             self.pairs[1] = reference
             self.reset_row_shift()

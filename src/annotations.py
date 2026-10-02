@@ -275,6 +275,7 @@ class AnnotationMixin:
             else:
                 self._draw_markers(pane)
                 self._draw_tool_points(pane)
+                self._draw_candidates(pane)
                 if last_in_row[pane.row] is pane:
                     self._draw_legend(pane, width, height)
             self._draw_badge(pane)

@@ -4,6 +4,7 @@ import tkinter as tk
 
 from .annotations import AnnotationMixin
 from .config import Config
+from .detection_ui import DetectMixin
 from .export import ExportMixin
 from .help import show_guide
 from .metadata import APP_AUTHOR, APP_EMAIL, APP_INSTITUTION, APP_VERSION
@@ -25,7 +26,8 @@ UNDO_LIMIT = 200
 COALESCE_SECONDS = 1.5
 
 
-class ImageComparer(ExportMixin, SessionMixin, AnnotationMixin, ToolsMixin, ViewerMixin, UIBuilderMixin):
+class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, ToolsMixin, ViewerMixin,
+                    UIBuilderMixin):
     def __init__(self, root, config=None):
         self.root = root
         self.config = config if config is not None else Config()
@@ -58,6 +60,9 @@ class ImageComparer(ExportMixin, SessionMixin, AnnotationMixin, ToolsMixin, View
         self._hover = None
         self._tool_point_order = []
         self._legend_fonts = {}
+        self._candidates = []
+        self._candidate_index = 0
+        self._candidate_summary = {}
         self._tool_state = {"row": None, "a": [], "b": [], "cur": [], "ref": []}
 
         self._restore_window()

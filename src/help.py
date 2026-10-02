@@ -13,6 +13,9 @@ GUIDE = [
         "through, so pinholes show as bright points) and a frontlit image (surface detail).",
         "- Click the empty Backlit panel and choose the backlit file, then do the same for Frontlit.",
         "- TIFF, PNG, JPEG and camera RAW files (ARW, NEF, CR2, DNG, ...) all work.",
+        "- Camera RAW files can be loaded as they are, with no conversion step.  A backlit RAW "
+        "frame is developed for dark-field viewing: the noise floor becomes black and pinholes are "
+        "brightened.  Exposure and noise reduction are under 'Brightness, contrast and noise'.",
         "- Drag to pan and scroll to zoom.  All panels move together and the red crosshair marks "
         "the same spot in each.  Press F to fit the image to the window.",
     ]),
@@ -47,14 +50,25 @@ GUIDE = [
         "- Right-click a marker to delete it, edit its label or change its colour.  Use Move (M) "
         "to drag a marker.  Ctrl+Z undoes any change.",
     ]),
-    ("5.  Save the session", [
+    ("5.  Let the software find pinholes", [
+        "- Choose Find pinholes (D) and drag a rectangle over the filter itself, leaving out the "
+        "holder and any glare.",
+        "- Each small bright spot without a marker is shown in turn, strongest first, in a yellow "
+        "circle.  Press Enter to accept it as a marker in the colour in use, S to skip it, or X if "
+        "it is not a pinhole.  Esc stops the review.",
+        "- With a reference row loaded and aligned, spots that are not in the earlier image come "
+        "first and are labelled as new; tick 'Only new since reference' to see just those.",
+        "- Sensitivity sets how faint a spot may be.  The search suggests; you decide.  Check each "
+        "candidate against the frontlit image, since dust and glints can also look bright.",
+    ]),
+    ("6.  Save the session", [
         "- Ctrl+S saves everything except the image data itself: which images, the alignment, "
         "markers, legend and display settings.",
         "- Keep the session file in the same folder as its images.  The session then still opens "
         "after the folder is moved, renamed or synced to another computer.",
         "- A star in the title bar means there are unsaved changes.",
     ]),
-    ("6.  Compare with an earlier inspection", [
+    ("7.  Compare with an earlier inspection", [
         "To see what a test did to a filter, show the earlier inspection underneath the new one.",
         "- Open the newer session (or load its images) as usual.",
         "- File > Load reference session, and choose the earlier inspection's session file.  It "
@@ -65,7 +79,7 @@ GUIDE = [
         "- Edit > Copy markers from reference row brings the earlier markers into the current "
         "inspection, so you only need to add what is new.",
     ]),
-    ("7.  Export a figure", [
+    ("8.  Export a figure", [
         "- Choose Crop export (C) and drag a rectangle around the region of interest, or use "
         "File > Export current view.",
         "- A preview opens where you can adjust label, legend and line sizes, and choose whether "
@@ -91,9 +105,11 @@ SHORTCUTS = [
         ("L", "Level (make upright)"),
         ("G", "Align frontlit to backlit"),
         ("R", "Align reference row to current row"),
+        ("D", "Find pinholes"),
         ("C", "Crop export"),
         ("Esc", "Clear points, or return to Pan"),
         ("Enter", "Apply the alignment points"),
+        ("Enter  /  S  /  X", "Accept, skip or reject a found pinhole"),
     ]),
     ("View", [
         ("F", "Fit to window"),

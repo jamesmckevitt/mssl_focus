@@ -1,4 +1,4 @@
-"""Shared test helpers: synthetic filter images and a driver for the Tk app."""
+﻿"""Shared test helpers: synthetic filter images and a driver for the Tk app."""
 
 import json
 import math
@@ -29,9 +29,9 @@ def make_filter_image(size=(1200, 800), dots=(), rotation=0.0, shift=(0, 0), sca
 
     if mesh:
         for gx in range(100, width, 100):
-            draw.line([place(gx, 40), place(gx, height - 40)], fill=(40, 40, 46), width=2)
+            draw.line([place(gx, 40), place(gx, height - 40)], fill=(26, 26, 30), width=2)
         for gy in range(100, height, 100):
-            draw.line([place(40, gy), place(width - 40, gy)], fill=(40, 40, 46), width=2)
+            draw.line([place(40, gy), place(width - 40, gy)], fill=(26, 26, 30), width=2)
     for x, y in dots:
         px, py = place(x, y)
         draw.ellipse([px - 3, py - 3, px + 3, py + 3], fill=(dot_value,) * 3)

@@ -81,23 +81,42 @@ def format_exposure_time(seconds):
     return f"{seconds:.3g} s"
 
 
-def describe_camera(info, with_equipment=True):
-    """One line such as ``f/8  |  10 s  |  ISO 2000  |  30 mm  |  ILCE-6400``."""
-    if not info:
-        return ""
+def camera_parts(info, with_equipment=True):
+    """The settings as ``(key, text)`` pairs, in display order."""
+    info = info or {}
     parts = []
     if "f_number" in info:
-        parts.append(f"f/{info['f_number']:g}")
+        parts.append(("f_number", f"f/{info['f_number']:g}"))
     if "exposure_time" in info:
-        parts.append(format_exposure_time(info["exposure_time"]))
+        parts.append(("exposure_time", format_exposure_time(info["exposure_time"])))
     if "iso" in info:
-        parts.append(f"ISO {info['iso']}")
+        parts.append(("iso", f"ISO {info['iso']}"))
     if with_equipment:
         if "focal_length" in info:
-            parts.append(f"{info['focal_length']:g} mm")
+            parts.append(("focal_length", f"{info['focal_length']:g} mm"))
         if "model" in info:
-            parts.append(info["model"])
-    return "  |  ".join(parts)
+            parts.append(("model", info["model"]))
+    return parts
+
+
+def describe_camera(info, with_equipment=True):
+    """One line such as ``f/8  |  10 s  |  ISO 2000  |  30 mm  |  ILCE-6400``."""
+    return "  |  ".join(text for _key, text in camera_parts(info, with_equipment))
+
+
+def mismatched_settings(a, b):
+    """Keys of the settings that both images record but with different values."""
+    a, b = a or {}, b or {}
+    differing = set()
+    for key in ("f_number", "exposure_time", "iso", "focal_length", "model"):
+        if key not in a or key not in b:
+            continue
+        if isinstance(a[key], str) or isinstance(b[key], str):
+            if a[key] != b[key]:
+                differing.add(key)
+        elif abs(a[key] - b[key]) > 1e-3 * max(abs(a[key]), abs(b[key])):
+            differing.add(key)
+    return differing
 
 
 def exposure_stops(saved, target):

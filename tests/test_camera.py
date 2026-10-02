@@ -7,6 +7,7 @@ from src.camera import (
     describe_camera,
     exposure_stops,
     format_exposure_time,
+    mismatched_settings,
     read_camera_info,
 )
 from src.imaging import open_image
@@ -66,3 +67,12 @@ def test_differences_between_two_photos_are_spelled_out():
     assert exposure_stops(then, now) == pytest.approx(-0.018, abs=0.01)
     assert exposure_stops(then, {"f_number": 8.0, "exposure_time": 0.4, "iso": 2000}) == pytest.approx(1.0)
     assert exposure_stops(then, {}) is None
+
+
+def test_mismatched_settings_names_only_what_both_record_differently():
+    a = {"f_number": 8.0, "exposure_time": 0.2, "iso": 2000, "model": "ILCE-6400"}
+    b = {"f_number": 9.0, "exposure_time": 0.2, "iso": 2000, "model": "ILCE-7"}
+    assert mismatched_settings(a, b) == {"f_number", "model"}
+    assert mismatched_settings(a, dict(a)) == set()
+    assert mismatched_settings(a, {}) == set()
+    assert mismatched_settings(None, b) == set()

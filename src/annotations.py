@@ -8,7 +8,7 @@ from tkinter import colorchooser, messagebox, ttk
 
 from . import geometry as geo
 from . import theme
-from .camera import describe_camera
+from .camera import camera_parts, mismatched_settings
 from .constants import _PRESET_COLOURS
 from .pair import BACKLIT, FRONTLIT, marker_text
 from .viewer import CURRENT, REFERENCE
@@ -391,20 +391,37 @@ class AnnotationMixin:
             parts.append(pair.label)
         parts.extend(files[:1] if not overlay else [" + ".join(files)] if files else [])
         text = "   |   ".join(parts)
-        # Second line: how the photograph was taken.
-        if overlay:
-            camera_lines = [f"{name}:  {describe_camera(pair.camera[i])}"
-                            for i, name in ((BACKLIT, "Backlit"), (FRONTLIT, "Frontlit")) if pair.camera[i]]
-        else:
-            camera_lines = [describe_camera(pair.camera[pane.idx])] if pair.camera[pane.idx] else []
         pad = self.px(5)
-        item = canvas.create_text(self.px(8) + pad, self.px(8) + pad, anchor=tk.NW, text=text, fill=colour,
+        left = self.px(8) + pad
+        item = canvas.create_text(left, self.px(8) + pad, anchor=tk.NW, text=text, fill=colour,
                                   font=self.fonts["bold"], tags="hud")
         items = [item]
-        if camera_lines:
-            below = canvas.bbox(item)[3] + self.px(2)
-            items.append(canvas.create_text(self.px(8) + pad, below, anchor=tk.NW, text="\n".join(camera_lines),
-                                            fill=theme.TEXT, font=self.fonts["small"], tags="hud"))
+
+        # Below it: how the photograph was taken.  A setting that differs from the
+        # matching image in the other row is shown in red.
+        if overlay:
+            lines = [(name + ":  ", i) for i, name in ((BACKLIT, "Backlit"), (FRONTLIT, "Frontlit"))
+                     if pair.camera[i]]
+        else:
+            lines = [("", pane.idx)] if pair.camera[pane.idx] else []
+        other = self.pairs[CURRENT if pane.row == REFERENCE else REFERENCE]
+        compare = self._reference_ready()
+        if self._badge_font is None:
+            self._badge_font = tkfont.Font(root=self.root, font=self.fonts["small"])
+        y = canvas.bbox(item)[3] + self.px(2)
+        for prefix, idx in lines:
+            differing = mismatched_settings(pair.camera[idx], other.camera[idx]) if compare else set()
+            segments = [(prefix, theme.TEXT)] if prefix else []
+            for n, (key, part) in enumerate(camera_parts(pair.camera[idx])):
+                if n:
+                    segments.append(("  |  ", theme.MUTED))
+                segments.append((part, theme.MISMATCH if key in differing else theme.TEXT))
+            x = left
+            for part, fill in segments:
+                items.append(canvas.create_text(x, y, anchor=tk.NW, text=part, fill=fill,
+                                                font=self._badge_font, tags="hud"))
+                x += self._badge_font.measure(part)
+            y += self._badge_font.metrics("linespace")
         x0, y0, x1, y1 = canvas.bbox(*items)
         back = canvas.create_rectangle(x0 - pad, y0 - pad, x1 + pad, y1 + pad, fill="#101010",
                                        outline="#333333", tags="hud")

@@ -651,18 +651,47 @@ def test_panels_show_how_each_photo_was_taken(app, tmp_path):
     app.load_image_path(str(save_with_exif(tmp_path / "front.jpg", 9, (1, 4))), FRONTLIT)
     wait_idle(app)
 
-    def badge(idx):
-        canvas = pane(app, 0, idx).canvas
-        return [canvas.itemcget(item, "text") for item in canvas.find_withtag("hud")
-                if canvas.type(item) == "text"]
+    def badge(idx, row=0):
+        canvas = pane(app, row, idx).canvas
+        return "".join(canvas.itemcget(item, "text") for item in canvas.find_withtag("hud")
+                       if canvas.type(item) == "text")
 
     assert "f/8  |  10 s  |  ISO 2000  |  30 mm  |  ILCE-6400" in badge(BACKLIT)
     assert "f/9  |  1/4 s  |  ISO 2000  |  30 mm  |  ILCE-6400" in badge(FRONTLIT)
     app.mode_var.set("overlay")
     app._on_mode_change()
     wait_idle(app)
-    overlay = "\n".join(badge(BACKLIT))
-    assert "Backlit:  f/8" in overlay and "Frontlit:  f/9" in overlay
+    assert "Backlit:  f/8" in badge(BACKLIT) and "Frontlit:  f/9" in badge(BACKLIT)
+
+
+def test_settings_that_differ_between_rows_are_shown_in_red(app, tmp_path):
+    from src import theme
+    from tests.test_camera import save_with_exif
+
+    app.load_image_path(str(save_with_exif(tmp_path / "back_new.jpg", 9, (10, 1))), BACKLIT)
+    wait_idle(app)
+    app.load_image_path(str(save_with_exif(tmp_path / "front_new.jpg", 9, (1, 4))), FRONTLIT)
+    wait_idle(app)
+
+    def red(row, idx):
+        canvas = pane(app, row, idx).canvas
+        return sorted(canvas.itemcget(item, "text") for item in canvas.find_withtag("hud")
+                      if canvas.type(item) == "text" and canvas.itemcget(item, "fill") == theme.MISMATCH)
+
+    assert red(0, BACKLIT) == [] and red(0, FRONTLIT) == [], "nothing to compare with yet"
+
+    app.load_image_path(str(save_with_exif(tmp_path / "back_old.jpg", 8, (10, 1))), BACKLIT, 1)
+    wait_idle(app)
+    app.load_image_path(str(save_with_exif(tmp_path / "front_old.jpg", 8, (1, 5))), FRONTLIT, 1)
+    wait_idle(app)
+    # Backlit: only the aperture changed.  Frontlit: aperture and exposure time.
+    assert red(0, BACKLIT) == ["f/9"] and red(1, BACKLIT) == ["f/8"]
+    assert red(0, FRONTLIT) == ["1/4 s", "f/9"] and red(1, FRONTLIT) == ["1/5 s", "f/8"]
+
+    app.show_reference_var.set(False)
+    app._on_reference_toggle()
+    wait_idle(app)
+    assert red(0, BACKLIT) == [] and red(0, FRONTLIT) == []
 
 
 def test_loading_settings_reports_the_camera_they_were_saved_with(app, tmp_path, monkeypatch):

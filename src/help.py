@@ -18,7 +18,8 @@ GUIDE = [
         "Loading shows the camera settings the look was saved with, and warns if this image was "
         "taken differently.",
         "- Under each panel's title is how that photograph was taken: aperture, exposure time, ISO, "
-        "focal length and camera.",
+        "focal length and camera.  With a reference row loaded, a setting shown in red differs "
+        "from the matching image in the other row.",
         "- Camera RAW files can be loaded as they are, with no conversion step.  A backlit RAW "
         "frame is developed for dark-field viewing: the noise floor becomes black and pinholes are "
         "brightened.  Exposure and noise reduction are under 'Brightness, contrast and noise'.",

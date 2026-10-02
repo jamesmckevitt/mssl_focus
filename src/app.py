@@ -60,6 +60,7 @@ class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, Too
         self._hover = None
         self._tool_point_order = []
         self._legend_fonts = {}
+        self._badge_font = None
         self._candidates = []
         self._candidate_index = 0
         self._candidate_summary = {}

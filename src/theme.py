@@ -24,6 +24,7 @@ FRONTLIT = "#4fd0ff"
 ALIGN_POINT = "#7dffb0"
 ROW_POINT = "#ff8cf0"
 CURSOR = "#ff4d4d"
+MISMATCH = "#ff6b6b"     # a setting that differs between the two rows
 
 
 def ui_scale(widget):

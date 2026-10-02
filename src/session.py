@@ -6,6 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from . import geometry as geo
 from . import theme
 from .camera import camera_differences, describe_camera, exposure_stops
 from .imaging import IMAGE_FILETYPES, is_raw
@@ -13,7 +14,9 @@ from .metadata import APP_VERSION
 from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
 
 SESSION_FILETYPES = [("Session file", "*.json"), ("All files", "*.*")]
-SESSION_VERSION = 2
+SESSION_VERSION = 3      # 3: a session holds one inspection (one row); earlier ones could hold two
+RAW_CROP_VERSION = 2     # before this, markers were placed on the uncropped RAW frame
+CURRENT, REFERENCE = 0, 1
 SETTINGS_FILE_TYPE = "mssl_focus_image_settings"
 SETTINGS_FILETYPES = [("Image settings or session", "*.json"), ("All files", "*.*")]
 
@@ -102,7 +105,54 @@ def session_image_paths(session, session_path, reference=False):
 
 
 def session_has_reference(session):
+    """Whether a session from an earlier version also holds a second (reference) row."""
     return bool(session.get("compare_row_enabled")) or any(_pair_of(session.get("compare_image_paths")))
+
+
+def describe_saved_reference(session):
+    """What the second row of an earlier, two-row session was, for telling the user."""
+    label = session.get("compare_label") or ""
+    names = [Path(str(p).replace("\\", "/")).name for p in _pair_of(session.get("compare_image_paths")) if p]
+    files = ", ".join(names)
+    return f"{label} ({files})" if label and files else label or files or "unnamed"
+
+
+def alignment_key(other_session_path, session_dir):
+    """How a session refers to another session it has been lined up with."""
+    return relative_to(other_session_path, session_dir) or str(other_session_path)
+
+
+def row_alignments_from_session(session):
+    """How this session's row lines up with other sessions shown as its reference row:
+    ``{key of the other session: record}``.  A two-row session from an earlier version
+    stored one such alignment with its reference row; that one is kept too."""
+    found = {}
+    stored = session.get("row_alignments")
+    if isinstance(stored, dict):
+        found.update({str(key): dict(value) for key, value in stored.items() if isinstance(value, dict)})
+    other = session.get("compare_session_path_rel")
+    transform = session.get("compare_row_transform")
+    if other and isinstance(transform, dict) and other not in found and session_has_reference(session):
+        found[str(other)] = {
+            "off_x": _float(transform.get("off_x"), 0.0),
+            "off_y": _float(transform.get("off_y"), 0.0),
+            "rot": _float(transform.get("rot"), 0.0),
+            "scale": _float(transform.get("scale"), 1.0),
+            "current_rotation": _float((session.get("alignment") or {}).get("glob_rot"), 0.0),
+            "reference_rotation": _float((session.get("compare_alignment") or {}).get("glob_rot"), 0.0),
+        }
+    return found
+
+
+def row_matrix_from_record(record, current, reference):
+    """The matrix taking ``reference``'s pair space to ``current``'s, from a saved
+    alignment record, allowing for either row having been levelled differently since."""
+    centre_c, centre_r = current.centre(BACKLIT), reference.centre(BACKLIT)
+    saved = geo.translation(_float(record.get("off_x"), 0.0), _float(record.get("off_y"), 0.0)) @ geo.about(
+        centre_r, max(0.01, _float(record.get("scale"), 1.0)), _float(record.get("rot"), 0.0))
+    turned_c = current.glob_rot - _float(record.get("current_rotation"), current.glob_rot)
+    turned_r = reference.glob_rot - _float(record.get("reference_rotation"), reference.glob_rot)
+    return geo.about(centre_c, 1.0, turned_c) @ saved @ geo.about(centre_r, 1.0, -turned_r)
 
 
 def fill_pair_from_session(pair, session, reference=False):
@@ -127,7 +177,7 @@ def fill_pair_from_session(pair, session, reference=False):
 def shift_legacy_raw_markers(pair, session, base_image):
     """Sessions from v1.x placed markers on the uncropped RAW frame; RAW files are now
     cropped to the camera's image area, so move those markers by the crop margin."""
-    if int(_float(session.get("version"), 1)) >= SESSION_VERSION or not is_raw(pair.paths[BACKLIT]):
+    if int(_float(session.get("version"), 1)) >= RAW_CROP_VERSION or not is_raw(pair.paths[BACKLIT]):
         return
     left, top = getattr(base_image, "info", {}).get("raw_crop_margins", (0, 0))
     for ann in pair.annotations:
@@ -176,8 +226,11 @@ def _float(value, default):
 
 class SessionMixin:
     def _session_record(self, session_path):
+        """What a session file holds: the current row only.  A reference row is another
+        inspection with a session of its own; all that is kept of it here is how the
+        two line up, so that loading it again as the reference restores the alignment."""
         session_dir = Path(session_path).resolve().parent
-        current, reference = self.pairs
+        current = self.pairs[CURRENT]
         record = {
             "version": SESSION_VERSION,
             "app_version": APP_VERSION,
@@ -199,27 +252,49 @@ class SessionMixin:
             "noise_reduction": [dict(n) for n in current.nr],
             "raw_develop": [develop_record(d, session_dir) for d in current.develop],
             "camera_settings": [dict(c) for c in current.camera],
-            "compare_row_enabled": bool(self.show_reference_var.get() and reference.has_any_image()),
-            "compare_image_paths": list(reference.paths),
-            "compare_image_paths_rel": [relative_to(p, session_dir) for p in reference.paths],
-            "compare_alignment": reference.alignment_record(),
-            "compare_row_transform": {
-                "off_x": round(self.row_shift["x"], 3),
-                "off_y": round(self.row_shift["y"], 3),
-                "rot": round(self.row_shift["rot"], 4),
-                "scale": round(self.row_shift["scale"], 5),
-            },
-            "compare_adjustments": [dict(a) for a in reference.adjust],
-            "compare_noise_reduction": [dict(n) for n in reference.nr],
-            "compare_raw_develop": [develop_record(d, session_dir) for d in reference.develop],
-            "compare_camera_settings": [dict(c) for c in reference.camera],
-            "compare_annotations": [normalise_annotation(a) for a in reference.annotations],
-            "compare_colour_labels": dict(reference.colour_labels),
-            "compare_filter_outline": [list(p) for p in reference.outline],
-            "compare_label": reference.label,
-            "compare_session_path_rel": relative_to(reference.session_path, session_dir),
+            "row_alignments": self._row_alignments_to_save(session_dir),
         }
         return record
+
+    def _row_alignments_to_save(self, session_dir):
+        """The current row's known alignments to other sessions, with the one to the
+        reference row now shown brought up to date."""
+        current, reference = self.pairs
+        alignments = {key: dict(value) for key, value in current.row_alignments.items()}
+        if reference.session_path and reference.has_image(BACKLIT) and current.has_image(BACKLIT):
+            key = alignment_key(reference.session_path, session_dir)
+            aligned = any(abs(self.row_shift[name] - rest) > 1e-9
+                          for name, rest in (("x", 0.0), ("y", 0.0), ("rot", 0.0), ("scale", 1.0)))
+            if aligned or key in alignments:
+                alignments[key] = {
+                    "off_x": round(self.row_shift["x"], 3),
+                    "off_y": round(self.row_shift["y"], 3),
+                    "rot": round(self.row_shift["rot"], 4),
+                    "scale": round(self.row_shift["scale"], 5),
+                    "current_rotation": round(current.glob_rot, 4),
+                    "reference_rotation": round(reference.glob_rot, 4),
+                }
+        return alignments
+
+    def _restore_row_alignment(self):
+        """Line the rows up as they were when these two sessions were last saved together.
+        Returns whether a saved alignment was found."""
+        current, reference = self.pairs
+        if not (current.session_path and reference.session_path
+                and current.has_image(BACKLIT) and reference.has_image(BACKLIT)):
+            return False
+        record = current.row_alignments.get(
+            alignment_key(reference.session_path, Path(current.session_path).resolve().parent))
+        if record is not None:
+            self.set_row_matrix(row_matrix_from_record(record, current, reference))
+            return True
+        # Saved the other way round, with today's reference row as the current one.
+        record = reference.row_alignments.get(
+            alignment_key(current.session_path, Path(reference.session_path).resolve().parent))
+        if record is not None:
+            self.set_row_matrix(geo.invert(row_matrix_from_record(record, reference, current)))
+            return True
+        return False
 
     # ------------------------------------------------------------------ #
     # Save
@@ -249,12 +324,14 @@ class SessionMixin:
         return self._write_session(path)
 
     def _write_session(self, path):
+        record = self._session_record(path)
         try:
-            write_session(path, self._session_record(path))
+            write_session(path, record)
         except OSError as exc:
             messagebox.showerror("Save session", f"Could not save the session:\n{path}\n\n{exc}",
                                  parent=self.root)
             return None
+        self.pairs[0].row_alignments = record["row_alignments"]
         self.session_path = path
         self.pairs[0].session_path = path
         self.pairs[0].label = describe_location(path)
@@ -376,9 +453,29 @@ class SessionMixin:
             final[i] = var.get().strip() or None
         return final
 
-    def open_session(self, path=None):
-        title = "Open session"
-        if not self._confirm_discard("open another session"):
+    def _confirm_two_row_session(self, title, session, path, row):
+        """An earlier version saved the reference row inside the session.  Say that only
+        the session's own row is loaded now.  False cancels the load."""
+        lines = [
+            f"{os.path.basename(path)} was saved by an earlier version with two rows in it.",
+            "",
+            "A session now holds one inspection.  Only what was its current row will be loaded"
+            + (", into the reference row." if row == REFERENCE else "."),
+            "",
+            f"Its reference row was:  {describe_saved_reference(session)}",
+            "To compare with that inspection, load its own session into the reference row.",
+        ]
+        if session.get("compare_session_path_rel"):
+            lines.append("The alignment between the two rows is kept and comes back when you do.")
+        if row == CURRENT:
+            lines += ["", "Saving will rewrite the file with the one row only."]
+        return messagebox.askokcancel(title, "\n".join(lines), icon="warning", parent=self.root)
+
+    def open_session(self, path=None, row=CURRENT):
+        """Load a session -- one inspection's images, alignment and markers -- into the
+        current row, or into the reference row to compare against.  The other row stays."""
+        title = "Load session into reference row" if row == REFERENCE else "Open session"
+        if row == CURRENT and not self._confirm_discard("open another session"):
             return
         path = path or self._ask_session_file(title)
         if not path:
@@ -387,70 +484,69 @@ class SessionMixin:
         if session is None:
             return
         self._remember_dir(path)
+        if session_has_reference(session) and not self._confirm_two_row_session(title, session, path, row):
+            return
 
-        with_reference = session_has_reference(session)
+        # Always the session's own row -- never the reference row an earlier version saved with it.
         resolved, saved = session_image_paths(session, path)
-        entries = [(self._image_label(i, 0), resolved[i], saved[i]) for i in (BACKLIT, FRONTLIT)]
-        if with_reference:
-            ref_resolved, ref_saved = session_image_paths(session, path, reference=True)
-            entries += [(self._image_label(i, 1), ref_resolved[i], ref_saved[i]) for i in (BACKLIT, FRONTLIT)]
+        entries = [(self._image_label(i, row), resolved[i], saved[i]) for i in (BACKLIT, FRONTLIT)]
         final = self._locate_images(title, entries)
         if final is None:
             return
+        if row == REFERENCE and not any(final):
+            messagebox.showinfo(title, "That session does not name any images to load.", parent=self.root)
+            return
 
-        session_dir = Path(path).resolve().parent
-        current = ImagePair()
-        fill_pair_from_session(current, session)
-        missing_frames = resolve_frame_paths(current, session.get("raw_develop"), session_dir)
-        current.label = describe_location(path)
-        current.session_path = path
-        reference = ImagePair()
-        if with_reference:
-            fill_pair_from_session(reference, session, reference=True)
-            missing_frames += resolve_frame_paths(reference, session.get("compare_raw_develop"), session_dir)
-            reference.label = session.get("compare_label") or ""
-            rel = session.get("compare_session_path_rel")
-            if rel:
-                reference.session_path = str(Path(path).resolve().parent / rel)
-        new_pairs = [current, reference]
-
-        jobs = []
-        for n, image_path in enumerate(final):
-            if image_path:
-                row, idx = divmod(n, 2)
-                jobs.append(((row, idx), image_path, new_pairs[row].nr[idx], new_pairs[row].develop[idx]))
+        pair = ImagePair()
+        fill_pair_from_session(pair, session)
+        missing_frames = resolve_frame_paths(pair, session.get("raw_develop"), Path(path).resolve().parent)
+        pair.row_alignments = row_alignments_from_session(session)
+        pair.label = describe_location(path)
+        pair.session_path = path
+        jobs = [((row, idx), image_path, pair.nr[idx], pair.develop[idx])
+                for idx, image_path in enumerate(final) if image_path]
 
         def finished(loaded, errors):
             if errors:
                 self._report_load_errors(title, errors)
                 self.set_status("Session not opened: an image could not be loaded.")
                 return
-            for (row, idx), (image_path, base, pyramid) in loaded.items():
-                new_pairs[row].set_image(idx, image_path, base, pyramid)
-                if idx == BACKLIT and row == 0:
-                    shift_legacy_raw_markers(new_pairs[row], session, base)
-            if with_reference and not reference.label:
-                reference.label = describe_location(reference.paths[BACKLIT] or reference.paths[FRONTLIT])
-            self._reset_state()
-            self.pairs = new_pairs
-            transform = session.get("compare_row_transform") or {}
-            self.row_shift = {
-                "x": _float(transform.get("off_x"), 0.0),
-                "y": _float(transform.get("off_y"), 0.0),
-                "rot": _float(transform.get("rot"), 0.0),
-                "scale": max(0.01, _float(transform.get("scale"), 1.0)),
-            }
-            self.show_reference_var.set(with_reference and reference.has_any_image())
-            self.mode_var.set("overlay" if session.get("mode") == "overlay" else "sidebyside")
-            self.opacity_var.set(_float(session.get("opacity"), 0.5))
-            self.session_path = path
-            self.dirty = False
-            self.config.add_recent(path)
-            self._refresh_recent_menu()
+            for (_row, idx), (image_path, base, pyramid) in loaded.items():
+                pair.set_image(idx, image_path, base, pyramid)
+                if idx == BACKLIT:
+                    shift_legacy_raw_markers(pair, session, base)
+            other = self.pairs[REFERENCE if row == CURRENT else CURRENT]
+            if row == CURRENT:
+                reference_shown = self.show_reference_var.get() and other.has_any_image()
+                self._reset_state()
+                self.pairs = [pair, other]
+                self.show_reference_var.set(reference_shown)
+                self.mode_var.set("overlay" if session.get("mode") == "overlay" else "sidebyside")
+                self.opacity_var.set(_float(session.get("opacity"), 0.5))
+                self.session_path = path
+                self.config.add_recent(path)
+                self._refresh_recent_menu()
+            else:
+                was_dirty = self.dirty
+                self.pairs[REFERENCE] = pair
+                self.show_reference_var.set(True)
+                self._clear_tool_points(redraw=False)
+                if self.tool_var.get() in ("review", "detect"):
+                    self.set_tool("pan")
+                # Undo history refers to the row that was there before.
+                self._undo_stack.clear()
+                self._redo_stack.clear()
+                self._last_checkpoint = (None, 0.0)
+                self._update_undo_buttons()
+                self.dirty = was_dirty
+            self.reset_row_shift()
+            restored = self._restore_row_alignment()
             self._update_title()
             self._layout_panes()
             self._sync_controls()
-            if "zoom" in session and "pan_x" in session and "pan_y" in session:
+            saved_view = row == CURRENT and not other.has_any_image() and all(
+                key in session for key in ("zoom", "pan_x", "pan_y"))
+            if saved_view:
                 self.zoom = max(0.02, min(100.0, _float(session["zoom"], 1.0)))
                 self.pan_x = _float(session["pan_x"], 0.0)
                 self.pan_y = _float(session["pan_y"], 0.0)
@@ -459,64 +555,20 @@ class SessionMixin:
                 self._schedule_render()
             else:
                 self.fit_view()
-            self.set_status(f"Session opened: {path}" + (
-                f"  ({missing_frames} extra or dark frame(s) could not be found and were left out.)"
-                if missing_frames else ""))
+            where = "reference row" if row == REFERENCE else "current row"
+            message = f"Session loaded into the {where}: {os.path.basename(path)} ({pair.label})."
+            if self.pairs[CURRENT].has_any_image() and self.pairs[REFERENCE].has_any_image():
+                message += ("  The alignment between the rows was restored from when they were last saved together."
+                            if restored else "  Use Align rows to register the reference row to the current row.")
+            if missing_frames:
+                message += f"  ({missing_frames} extra or dark frame(s) could not be found and were left out.)"
+            self.set_status(message)
 
-        self._load_images(jobs, finished, title="Opening session")
+        self._load_images(jobs, finished, title="Opening session" if row == CURRENT else "Loading reference session")
 
     def open_reference_session(self, path=None):
-        """Load another session's image pair, alignment and annotations as the reference row."""
-        title = "Load reference session"
-        path = path or self._ask_session_file(title)
-        if not path:
-            return
-        session = self._read_session_or_report(path, title)
-        if session is None:
-            return
-        self._remember_dir(path)
-
-        # Always the session's own (main) pair -- never whatever reference row it had.
-        resolved, saved = session_image_paths(session, path)
-        entries = [(self._image_label(i, 1), resolved[i], saved[i]) for i in (BACKLIT, FRONTLIT)]
-        final = self._locate_images(title, entries)
-        if final is None:
-            return
-        if not any(final):
-            messagebox.showinfo(title, "That session does not name any images to load.", parent=self.root)
-            return
-
-        reference = ImagePair()
-        fill_pair_from_session(reference, session)
-        resolve_frame_paths(reference, session.get("raw_develop"), Path(path).resolve().parent)
-        reference.label = describe_location(path)
-        reference.session_path = path
-        jobs = [((1, idx), image_path, reference.nr[idx], reference.develop[idx])
-                for idx, image_path in enumerate(final) if image_path]
-
-        def finished(loaded, errors):
-            if errors:
-                self._report_load_errors(title, errors)
-                return
-            for (_row, idx), (image_path, base, pyramid) in loaded.items():
-                reference.set_image(idx, image_path, base, pyramid)
-                if idx == BACKLIT:
-                    shift_legacy_raw_markers(reference, session, base)
-            was_empty = not self.pairs[0].has_any_image()
-            self.pairs[1] = reference
-            self.reset_row_shift()
-            self.show_reference_var.set(True)
-            self._clear_tool_points()
-            self._mark_dirty()
-            self._layout_panes()
-            self._sync_controls()
-            if was_empty or self._view_is_fit:
-                self.fit_view()
-            self.set_status(
-                f"Reference row loaded from {os.path.basename(path)} ({reference.label}).  "
-                "Use Align rows to register it to the current row.")
-
-        self._load_images(jobs, finished, title="Loading reference session")
+        """Load another inspection's session as the reference row."""
+        self.open_session(path, row=REFERENCE)
 
     # ------------------------------------------------------------------ #
     # Image settings presets

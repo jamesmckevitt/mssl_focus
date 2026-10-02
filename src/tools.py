@@ -43,7 +43,7 @@ class ToolsMixin:
         if tool == "align_rows" and not self._reference_ready():
             messagebox.showinfo(
                 "Align rows",
-                "Load a reference row first (File > Load reference session, or the Images panel).\n\n"
+                "Load a reference row first (File > Open session into reference row, or the Images panel).\n\n"
                 "Align rows lines the reference row up with the current row so the same spot "
                 "on the filter sits under the cursor in both.",
                 parent=self.root)
@@ -140,9 +140,15 @@ class ToolsMixin:
             label = self.pairs[CURRENT].next_label(self.annot_colour) if self.annot_autolabel_var.get() else ""
             name = self.pairs[CURRENT].colour_labels.get(self.annot_colour, "")
             what = f"'{name}' marker" if name else "marker"
-            text = (f"Click a feature to place a {what}"
-                    + (f" (next label {label})" if label else "")
-                    + ".  Drag still pans.  Right-click a marker to relabel or delete it.  "
+            buttons = "annotate"
+            unsure = bool(self.annot_unsure_var.get())
+            text = (f"Click a feature to place {'an UNSURE' if unsure else 'a'} {what}"
+                    + (f" (next label {label}{'?' if unsure else ''})" if label else "")
+                    + ".  Drag still pans.  "
+                    + ("Untick 'Unsure (?)' (U) to place ordinary markers again.  " if unsure else
+                       "Not sure it is a pinhole?  Tick 'Unsure (?)' (U), or hold Shift while clicking, "
+                       "to add a question mark.  ")
+                    + "Right-click a marker to relabel, delete or change it.  "
                     "Change colour and size in the Annotations panel.")
         elif tool == "move":
             title = "Move markers"
@@ -337,7 +343,7 @@ class ToolsMixin:
             return
         tool = self.tool_var.get()
         if tool == "annotate":
-            self._click_annotate(pane, event.x, event.y)
+            self._click_annotate(pane, event.x, event.y, unsure=bool(getattr(event, "state", 0) & 0x1))
         elif tool == "align":
             self._click_align(pane, event.x, event.y)
         elif tool == "align_rows":
@@ -426,6 +432,10 @@ class ToolsMixin:
         if ctrl:
             return None
         lowered = key.lower()
+        if lowered == "u" and self.tool_var.get() == "annotate":
+            self.annot_unsure_var.set(not self.annot_unsure_var.get())
+            self._refresh_hint()
+            return "break"
         if lowered in TOOL_KEYS:
             self.set_tool(TOOL_KEYS[lowered])
             return "break"

@@ -243,16 +243,134 @@ def test_reference_session_brings_its_alignment_and_markers(app, tmp_path):
     app.copy_reference_annotations()
     assert len(current.annotations) == len(DOTS), "copying twice must not duplicate markers"
 
-    # The comparison survives a save and reopen.
+    # A session is the current row only: the reference row is not saved into it.
     app._write_session(str(stage2 / "session.json"))
     row_shift = dict(app.row_shift)
+    saved = read_session(stage2 / "session.json")
+    assert not [key for key in saved if key.startswith("compare_")]
+    assert [pathlib.Path(p).name for p in saved["image_paths"]] == ["back.png", "front.png"]
     app.new_session()
     app.open_session(str(stage2 / "session.json"))
     wait_idle(app)
-    assert app.show_reference_var.get()
+    assert not app.show_reference_var.get() and not app.pairs[1].has_any_image()
+    assert len(app.visible_panes()) == 2 and not app.dirty
+
+    # Loading the earlier inspection as the reference again brings the row alignment back.
+    app.open_session(str(stage1 / "session.json"), row=1)
+    wait_idle(app)
+    assert app.show_reference_var.get() and not app.dirty
     assert app.row_shift == pytest.approx(row_shift, abs=1e-2)
     assert len(app.pairs[1].annotations) == len(DOTS)
     assert app.pairs[1].label == "1_incoming / em9"
+    assert "restored" in app.status_var.get()
+
+    # ... also if that row has been levelled differently in the meantime: the features still coincide.
+    app.pairs[0].set_global_rotation(app.pairs[0].glob_rot + 0.8)
+    app._restore_row_alignment()
+    for dot in DOTS:
+        target = app.image_to_canvas(0, BACKLIT, *placed(dot, *back2))
+        assert app.image_to_canvas(1, BACKLIT, *placed(dot, *back1)) == pytest.approx(target, abs=0.75)
+
+    # ... and when the two are loaded the other way round.
+    app.new_session()
+    app.open_session(str(stage1 / "session.json"))
+    wait_idle(app)
+    app.open_session(str(stage2 / "session.json"), row=1)
+    wait_idle(app)
+    assert app.pairs[0].label == "1_incoming / em9" and app.pairs[1].label == "2_shock / em9"
+    for dot in DOTS:
+        target = app.image_to_canvas(0, BACKLIT, *placed(dot, *back1))
+        assert app.image_to_canvas(1, BACKLIT, *placed(dot, *back2)) == pytest.approx(target, abs=0.75)
+
+    # Opening another session into the current row leaves the reference row alone.
+    app.open_session(str(stage2 / "session.json"))
+    wait_idle(app)
+    assert app.pairs[0].label == "2_shock / em9" and app.pairs[1].label == "2_shock / em9"
+    assert app.session_path == str(stage2 / "session.json") and app.show_reference_var.get()
+
+
+def test_an_earlier_two_row_session_loads_its_own_row_only(app, tmp_path):
+    back1 = (0.0, (0, 0))
+    stage1 = make_stage(tmp_path / "1_incoming" / "em9", DOTS, back1)
+    load_stage(app, stage1)
+    app.set_tool("annotate")
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *DOTS[0]))
+    app._write_session(str(stage1 / "session.json"))
+
+    shift = (22, -14)
+    stage2 = make_stage(tmp_path / "2_shock" / "em9", DOTS, (0.0, shift), (0.0, shift, 1.0))
+    app.new_session()
+    load_stage(app, stage2)
+    app._write_session(str(stage2 / "session.json"))
+
+    # As versions up to 1.1.0-dev7 wrote it: the reference row inside the session.
+    old = read_session(stage2 / "session.json")
+    first = read_session(stage1 / "session.json")
+    old.pop("row_alignments")
+    old.update({
+        "version": 2,
+        "compare_row_enabled": True,
+        "compare_image_paths": first["image_paths"],
+        "compare_image_paths_rel": ["../../1_incoming/em9/back.png", "../../1_incoming/em9/front.png"],
+        "compare_alignment": first["alignment"],
+        "compare_row_transform": {"off_x": shift[0], "off_y": shift[1], "rot": 0.0, "scale": 1.0},
+        "compare_annotations": first["annotations"],
+        "compare_label": "1_incoming / em9",
+        "compare_session_path_rel": "../../1_incoming/em9/session.json",
+    })
+    write_json(stage2 / "session.json", old)
+
+    app.new_session()
+    app.confirm_answers["ok"] = False
+    app.open_session(str(stage2 / "session.json"))
+    wait_idle(app)
+    assert not app.pairs[0].has_any_image(), "cancelling the warning loads nothing"
+    message = app.confirmations[-1]
+    assert "two rows" in message and "1_incoming / em9" in message and "back.png" in message
+
+    app.confirm_answers["ok"] = True
+    app.open_session(str(stage2 / "session.json"))
+    wait_idle(app)
+    assert app.pairs[0].label == "2_shock / em9" and app.pairs[0].has_image(BACKLIT)
+    assert not app.pairs[1].has_any_image() and not app.show_reference_var.get()
+    assert len(app.visible_panes()) == 2
+
+    # The alignment it held is not lost: it returns with the reference session.
+    app.open_session(str(stage1 / "session.json"), row=1)
+    wait_idle(app)
+    assert app.row_shift == pytest.approx({"x": shift[0], "y": shift[1], "rot": 0.0, "scale": 1.0}, abs=1e-6)
+    assert len(app.pairs[1].annotations) == 1
+
+    # Loaded as a reference, it is again only its own row that is taken.
+    app.new_session()
+    load_stage(app, stage1)
+    app.open_session(str(stage2 / "session.json"), row=1)
+    wait_idle(app)
+    assert app.pairs[1].label == "2_shock / em9" and app.pairs[1].paths[BACKLIT] == str(stage2 / "back.png")
+
+    # Saving rewrites the file in the new form.
+    app.new_session()
+    app.open_session(str(stage2 / "session.json"))
+    wait_idle(app)
+    app._write_session(str(stage2 / "session.json"))
+    rewritten = read_session(stage2 / "session.json")
+    assert not [key for key in rewritten if key.startswith("compare_")]
+    assert "../../1_incoming/em9/session.json" in rewritten["row_alignments"]
+
+
+def test_markers_placed_by_hand_can_be_flagged_as_unsure(app, tmp_path):
+    load_stage(app, make_stage(tmp_path / "s", DOTS))
+    app.set_tool("annotate")
+    target = pane(app, 0, BACKLIT)
+    click(app, target, *app.image_to_canvas(0, BACKLIT, *DOTS[0]))
+    app.annot_unsure_var.set(True)
+    click(app, target, *app.image_to_canvas(0, BACKLIT, *DOTS[1]))
+    app.annot_unsure_var.set(False)
+    click(app, target, *app.image_to_canvas(0, BACKLIT, *DOTS[2]))
+    app._click_annotate(target, *app.image_to_canvas(0, BACKLIT, *DOTS[3]), unsure=True)   # Shift+click
+    markers = app.pairs[0].annotations
+    assert [bool(m.get("unsure")) for m in markers] == [False, True, False, True]
+    assert app.pairs[0].legend()[0][1] == "Pinholes  (n=4, 2 unsure)"
 
 
 def test_only_one_tool_is_active_and_points_do_not_leak(app, tmp_path):

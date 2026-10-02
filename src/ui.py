@@ -80,6 +80,7 @@ class UIBuilderMixin:
 
         self.annot_radius_var = tk.IntVar(value=20)
         self.annot_autolabel_var = tk.BooleanVar(value=True)
+        self.annot_unsure_var = tk.BooleanVar(value=False)
         self.annot_width_var = tk.DoubleVar(value=2.0)
         self.annot_label_size_var = tk.IntVar(value=12)
         self.canvas_legend_size_var = tk.IntVar(value=10)
@@ -128,7 +129,9 @@ class UIBuilderMixin:
 
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="New session", accelerator="Ctrl+N", command=self.new_session)
-        file_menu.add_command(label="Open session...", accelerator="Ctrl+O", command=self.open_session)
+        file_menu.add_command(label="Open session (into current row)...", accelerator="Ctrl+O",
+                              command=self.open_session)
+        file_menu.add_command(label="Open session into reference row...", command=self.open_reference_session)
         self.recent_menu = tk.Menu(file_menu, tearoff=False)
         file_menu.add_cascade(label="Open recent", menu=self.recent_menu)
         file_menu.add_command(label="Save session", accelerator="Ctrl+S", command=self.save_session)
@@ -138,7 +141,6 @@ class UIBuilderMixin:
         file_menu.add_command(label="Load backlit image...", command=lambda: self.load_image(BACKLIT))
         file_menu.add_command(label="Load frontlit image...", command=lambda: self.load_image(FRONTLIT))
         file_menu.add_separator()
-        file_menu.add_command(label="Load reference session...", command=self.open_reference_session)
         file_menu.add_command(label="Load reference backlit image...",
                               command=lambda: self.load_image(BACKLIT, REFERENCE))
         file_menu.add_command(label="Load reference frontlit image...",
@@ -304,6 +306,13 @@ class UIBuilderMixin:
         self.hint_add_all = ttk.Button(self.hint_actions, text="Add all", command=self.add_all_shown,
                                        takefocus=False)
         Tooltip(self.hint_add_all, "Add a marker for every circled spot in one go.  Ctrl+Z undoes it.")
+        self.hint_unsure_check = ttk.Checkbutton(self.hint_actions, text="Unsure (?)",
+                                                 variable=self.annot_unsure_var, style="Hint.TCheckbutton",
+                                                 takefocus=False, command=self._refresh_hint)
+        Tooltip(self.hint_unsure_check,
+                "While ticked, markers you place get a question mark after their label and are counted\n"
+                "as 'unsure' in the legend (U).  Holding Shift while clicking does the same for one marker.\n"
+                "Right-click a marker to confirm it later.")
         self.hint_accept = ttk.Button(self.hint_actions, text="Accept", style="Accent.TButton",
                                       command=self.review_accept, takefocus=False)
         self.hint_unsure = ttk.Button(self.hint_actions, text="Unsure (?)", command=self.review_unsure,
@@ -449,6 +458,8 @@ class UIBuilderMixin:
             for widget in (self.hint_accept_clear, self.hint_accept, self.hint_unsure, self.hint_skip,
                            self.hint_reject):
                 widget.pack(side=tk.LEFT, padx=pad)
+        if kind == "annotate":
+            self.hint_unsure_check.pack(side=tk.LEFT, padx=(pad, self.px(10)))
         if kind == "points":
             self.hint_scale_check.pack(side=tk.LEFT, padx=(pad, self.px(10)))
             self.hint_undo_point.pack(side=tk.LEFT, padx=pad)
@@ -643,13 +654,19 @@ class UIBuilderMixin:
         ttk.Label(body, text="CURRENT ROW", style="Group.TLabel").pack(anchor=tk.W)
         ttk.Label(body, textvariable=self.row_label_vars[CURRENT], style="Muted.TLabel").pack(anchor=tk.W)
         image_rows(CURRENT)
+        line = self._row(body, 4)
+        button = ttk.Button(line, text="Load session...", takefocus=False, command=self.open_session)
+        button.pack(side=tk.LEFT)
+        Tooltip(button, "Open a saved session into the current row (Ctrl+O).\nThe reference row stays as it is.")
 
         self._subheading(body, "Reference row")
         ttk.Label(body, textvariable=self.row_label_vars[REFERENCE], style="Muted.TLabel").pack(anchor=tk.W)
         image_rows(REFERENCE)
         line = self._row(body, 4)
-        ttk.Button(line, text="Load session...", takefocus=False,
-                   command=self.open_reference_session).pack(side=tk.LEFT)
+        button = ttk.Button(line, text="Load session...", takefocus=False, command=self.open_reference_session)
+        button.pack(side=tk.LEFT)
+        Tooltip(button, "Open a saved session into the reference row, to compare against.\n"
+                        "The current row stays as it is.")
         ttk.Button(line, text="Remove", takefocus=False,
                    command=self.remove_reference_row).pack(side=tk.LEFT, padx=self.px(6))
         self.swap_button = ttk.Button(line, text="Swap rows", takefocus=False, command=self.swap_rows)
@@ -658,7 +675,8 @@ class UIBuilderMixin:
                                   "if they were loaded the wrong way round.  Each keeps its own markers,\n"
                                   "settings and alignment.")
         self._note(body, "The reference row shows an earlier inspection of the same filter, "
-                         "with its markers, so you can see what a test changed.")
+                         "with its markers, so you can see what a test changed.  Saving a session "
+                         "saves the current row only.")
 
     # -- View ----------------------------------------------------------- #
 
@@ -761,6 +779,8 @@ class UIBuilderMixin:
             entry.bind("<FocusOut>", lambda _e: self._on_legend_fields_changed())
         ttk.Checkbutton(body, text="Number new markers (T1, T2, ...)", variable=self.annot_autolabel_var,
                         command=self._refresh_hint, takefocus=False).pack(anchor=tk.W, pady=(self.px(4), 0))
+        ttk.Checkbutton(body, text="Mark new markers as unsure (?)", variable=self.annot_unsure_var,
+                        command=self._refresh_hint, takefocus=False).pack(anchor=tk.W)
         self._note(body, "The legend name and prefix belong to the colour in use.")
 
         line = self._row(body)

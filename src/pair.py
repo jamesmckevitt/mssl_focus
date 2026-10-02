@@ -59,6 +59,7 @@ class ImagePair:
         self.label_prefixes = {}
         self.label = ""
         self.session_path = None
+        self.row_alignments = {}          # how this row lines up with other sessions shown as its reference
 
     # ------------------------------------------------------------------ #
     # Images

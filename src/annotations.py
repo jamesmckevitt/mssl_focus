@@ -41,7 +41,9 @@ class AnnotationMixin:
     # Editing
     # ------------------------------------------------------------------ #
 
-    def _click_annotate(self, pane, x, y):
+    def _click_annotate(self, pane, x, y, unsure=False):
+        """Place a marker; ``unsure`` (or the 'Unsure' box) flags it with a question mark."""
+        unsure = unsure or bool(self.annot_unsure_var.get())
         if pane.row != CURRENT:
             self.set_status("Markers belong to the current (top) row.  The reference row is read-only.")
             return
@@ -56,16 +58,20 @@ class AnnotationMixin:
         self._checkpoint("Add marker")
         img_x, img_y = self.canvas_to_image(CURRENT, BACKLIT, x, y)
         label = pair.next_label(colour) if self.annot_autolabel_var.get() else ""
-        pair.annotations.append({
+        marker = {
             "img1_x": img_x,
             "img1_y": img_y,
             "radius": self._marker_radius(),
             "colour": colour,
             "label": label,
-        })
+        }
+        if unsure:
+            marker["unsure"] = True
+        pair.annotations.append(marker)
         self._refresh_hint()
         self._draw_overlays()
-        self.set_status(f"Marker {label or len(pair.annotations)} added.  Ctrl+Z undoes.")
+        self.set_status(f"Marker {label or len(pair.annotations)} added"
+                        + (", marked as unsure (?)" if unsure else "") + ".  Ctrl+Z undoes.")
 
     def _ask_colour_details(self, colour):
         """First use of a colour: ask what it means and how its markers are numbered."""
@@ -197,7 +203,7 @@ class AnnotationMixin:
             messagebox.showinfo(
                 "Copy markers from reference",
                 "The reference row has no markers.\n\nLoad it from a saved session "
-                "(File > Load reference session) to bring that session's markers with it.",
+                "(File > Open session into reference row) to bring that session's markers with it.",
                 parent=self.root)
             return
         if not messagebox.askyesno(
@@ -305,7 +311,7 @@ class AnnotationMixin:
         colour = theme.BACKLIT if pane.idx == BACKLIT else theme.FRONTLIT
         name = "images" if overlay else self._image_label(pane.idx, pane.row).lower()
         if pane.row == REFERENCE:
-            lines = (f"No {name}", "Click to choose a file, or use\nFile > Load reference session")
+            lines = (f"No {name}", "Click to choose a file, or use\nFile > Open session into reference row")
         else:
             lines = (f"No {name}", "Click to choose a file")
         canvas.create_text(width / 2, height / 2 - self.px(14), text=lines[0], fill=colour,

@@ -58,6 +58,9 @@ GUIDE = [
         "- The first time a colour is used you are asked for its legend name and a label prefix; "
         "markers are then numbered automatically (T1, T2, ...).",
         "- Click a feature to mark it.  Dragging still pans, so you do not need to switch tools.",
+        "- Not sure something is a pinhole?  Tick 'Unsure (?)' in the blue bar (or press U, or hold "
+        "Shift while clicking): the marker gets a question mark after its label and is counted as "
+        "'unsure' in the legend.  Right-click a marker to change it later.",
         "- Right-click a marker to delete it, edit its label or change its colour.  Use Move (M) "
         "to drag a marker.  Ctrl+Z undoes any change.",
     ]),
@@ -86,8 +89,10 @@ GUIDE = [
         "and glints can also look bright.",
     ]),
     ("6.  Save the session", [
-        "- Ctrl+S saves everything except the image data itself: which images, the alignment, "
-        "markers, legend and display settings.",
+        "- A session is one inspection: one row.  Ctrl+S saves the current (top) row: which images, "
+        "the alignment, markers, legend and display settings, but not the image data itself.",
+        "- The reference row is never saved into it.  It is another inspection, with a session file "
+        "of its own.  To change that one, use 'Swap rows' so it becomes the current row, then save.",
         "- Keep the session file in the same folder as its images.  The session then still opens "
         "after the folder is moved, renamed or synced to another computer.",
         "- A star in the title bar means there are unsaved changes.",
@@ -95,11 +100,13 @@ GUIDE = [
     ("7.  Compare with an earlier inspection", [
         "To see what a test did to a filter, show the earlier inspection underneath the new one.",
         "- Open the newer session (or load its images) as usual.",
-        "- File > Load reference session, and choose the earlier inspection's session file.  It "
+        "- File > Open session into reference row, and choose the earlier inspection's session file.  It "
         "appears as the reference row, with its own alignment and markers (dashed circles).",
         "- Choose Align rows (R).  Click a feature of the filter in the top row, then the same "
         "feature in the bottom row; repeat for two or more features and press Apply.",
-        "- The crosshair now marks the same place on the filter in all four panels.",
+        "- The crosshair now marks the same place on the filter in all four panels.  When you save, "
+        "the session remembers how it lines up with that reference session, so the alignment comes "
+        "back the next time you load the two together.",
         "- Loaded them the wrong way round?  'Swap rows' in the Images panel exchanges the two, each "
         "keeping its own markers, settings and alignment.",
         "- If the two inspections were photographed with different exposures, open 'Brightness, "
@@ -140,6 +147,7 @@ SHORTCUTS = [
         ("Esc", "Clear points, or return to Pan"),
         ("Enter", "Apply the alignment points"),
         ("Enter  /  U  /  S  /  X", "Accept, mark unsure, skip or reject a found pinhole"),
+        ("U  or  Shift+click", "While annotating: place markers flagged as unsure (?)"),
     ]),
     ("View", [
         ("F", "Fit to window"),

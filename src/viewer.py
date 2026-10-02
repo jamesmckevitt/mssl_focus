@@ -547,9 +547,8 @@ class ViewerMixin:
             return
         if not messagebox.askyesno(
                 "Remove reference row",
-                "Remove the reference row from this session?\n\n"
-                "The reference images and its alignment to the current row are dropped; "
-                "the reference session file itself is not changed.",
+                "Remove the reference row?\n\n"
+                "Its session file is not changed, and you can load it again at any time.",
                 parent=self.root):
             return
         self._new_pair(REFERENCE)
@@ -557,7 +556,6 @@ class ViewerMixin:
         self.show_reference_var.set(False)
         if self.tool_var.get() == "align_rows":
             self.set_tool("pan")
-        self._mark_dirty()
         self._layout_panes()
         self._sync_controls()
 

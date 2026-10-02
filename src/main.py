@@ -71,8 +71,42 @@ from .app import ImageComparer
 from .license_flow import check_license
 
 
+def _install_error_reporting(root):
+    """Tell the user when something goes wrong instead of failing silently.
+
+    The packaged app has no console, so an unhandled error in a button or mouse
+    handler would otherwise just look like the click did nothing.
+    """
+    import datetime
+    import traceback
+
+    from .config import config_dir
+
+    log_path = config_dir() / "error.log"
+
+    def report(exc_type, exc_value, exc_traceback):
+        details = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(f"\n--- {datetime.datetime.now().isoformat(timespec='seconds')} ---\n{details}")
+        except OSError:
+            pass
+        sys.stderr.write(details)
+        messagebox.showerror(
+            "MSSL FOCUS - Unexpected error",
+            f"Something went wrong:\n\n{exc_type.__name__}: {exc_value}\n\n"
+            "Your session is still open; save it under a new name if you are unsure.\n"
+            f"Details were written to:\n{log_path}",
+            parent=root,
+        )
+
+    root.report_callback_exception = report
+
+
 def run_app():
     check_license(license_backend)
     root = tk.Tk()
+    _install_error_reporting(root)
     ImageComparer(root)
     root.mainloop()

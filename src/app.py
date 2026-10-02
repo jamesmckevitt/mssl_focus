@@ -65,6 +65,11 @@ class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, Too
         self._candidate_index = 0
         self._candidate_summary = {}
         self._outline_rect = None
+        self._outline_built = None
+        self._outline_redraw = False
+        self._detection = None
+        self._rejected = set()
+        self._pending_key = None
         self._tool_state = {"row": None, "a": [], "b": [], "cur": [], "ref": []}
 
         self._restore_window()
@@ -182,6 +187,10 @@ class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, Too
         self._sync_controls()
         self._schedule_render()
         self.set_status(f"{verb}: {label}")
+        if self.tool_var.get() in ("detect", "review"):   # the search area may have changed
+            self._prepare_detect_tool()
+            self._update_cursor()
+            self._ensure_search()
 
     def undo(self):
         self._step_history(self._undo_stack, self._redo_stack, "Undid")

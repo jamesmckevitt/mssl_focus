@@ -1,11 +1,17 @@
 import numpy as np
+import pytest
 from PIL import Image
 
 from src import geometry as geo
 from src.detect import (
+    DEFAULT_SENSITIVITY,
     find_pinholes,
     flag_present_in,
+    inside_polygon,
     markers_without_a_spot,
+    match_markers_to_spots,
+    minimum_score,
+    realign_markers,
     point_in_polygon,
     split_by_markers,
 )
@@ -82,6 +88,68 @@ def test_new_spots_are_told_apart_from_ones_seen_before():
     assert [c["in_reference"] for c in candidates] == [False, False]
 
 
+def test_sensitivity_sets_how_faint_a_spot_may_be():
+    arr = np.full((400, 600), 5, dtype=np.uint8)
+    arr[100:104, 100:104] = 250         # unmistakable
+    arr[200:204, 300:304] = 48          # modest
+    arr[300:304, 500:504] = 27          # barely there
+    found, _total = find_pinholes(Image.fromarray(arr))
+    scores = [c["score"] for c in found]
+    assert scores == sorted(scores, reverse=True)
+    assert scores[0] > 3 > scores[1] > 2 > scores[2] >= 1, "the tiers are bands of one score"
+
+    def offered(sensitivity):
+        return sum(1 for c in found if c["score"] >= minimum_score(sensitivity))
+
+    assert [offered(s) for s in (0, 50, 75, 100)] == [1, 1, 2, 3]
+    assert DEFAULT_SENSITIVITY == 75
+
+
+def test_markers_are_matched_to_the_spots_they_mark():
+    spots = [{"x": 100.0, "y": 100.0, "tier": "clear"}, {"x": 130.0, "y": 100.0, "tier": "faint"},
+             {"x": 400.0, "y": 300.0, "tier": "likely"}, {"x": 108.0, "y": 104.0, "tier": "faint"}]
+    markers = [(110.0, 105.0, 20.0),     # a faint spot is nearer, but the clear one is what it marks
+               (118.0, 100.0, 20.0),     # the clear spot is taken, so it gets the faint one beside it
+               (700.0, 700.0, 20.0)]     # nothing there
+    matched = match_markers_to_spots(markers, spots)
+    assert {m: (c["x"], c["y"]) for m, c in matched.items()} == {0: (100.0, 100.0), 1: (108.0, 104.0)}
+
+
+def test_a_copied_map_is_realigned_as_a_whole():
+    places = [(200.0, 200.0), (900.0, 180.0), (620.0, 420.0), (300.0, 640.0), (980.0, 610.0), (500.0, 300.0)]
+    spots = [{"x": x, "y": y, "tier": "clear"} for x, y in places[:5]]      # the sixth is too faint to find
+    # The filter sat differently for the earlier inspection: every marker is off by
+    # the same rotation and shift, further than its own radius.
+    earlier = geo.translation(24, -17) @ geo.about((600, 400), 1.0, 0.6)
+    markers = [(*geo.apply(earlier, x, y), 20.0) for x, y in places]
+    assert min(np.hypot(m[0] - p[0], m[1] - p[1]) for m, p in zip(markers, places)) > 20
+    # Two more were placed on this very image, so they are not off like the rest:
+    # one on a spot, one on something too faint to find.
+    spots.append({"x": 760.0, "y": 520.0, "tier": "clear"})
+    markers += [(763.0, 518.0, 20.0), (420.0, 560.0, 20.0)]
+    positions, matched = realign_markers(markers, spots)
+    assert matched == {0, 1, 2, 3, 4, 6}
+    for found, (x, y) in zip(positions[:5], places):
+        assert found == pytest.approx((x, y), abs=0.01), "found although the spot is outside the circle"
+    assert positions[5] == markers[5][:2], "a marker with no spot is left exactly where it is"
+    assert positions[6] == (760.0, 520.0) and positions[7] == (420.0, 560.0)
+
+    # Markers that are merely placed a little carelessly are centred one by one;
+    # one with no spot under it then has nothing to follow, and stays.
+    careless = [(207.0, 195.0, 20.0), (891.0, 184.0, 20.0), (620.0, 420.0, 20.0), (306.0, 648.0, 20.0),
+                (976.0, 604.0, 20.0), (500.0, 300.0, 20.0)]
+    positions, matched = realign_markers(careless, spots)
+    assert positions[:5] == places[:5] and positions[5] == (500.0, 300.0)
+    assert matched == {0, 1, 2, 3, 4}
+
+
+def test_many_points_are_tested_against_the_outline_at_once():
+    outline = geo.rounded_rectangle(100, 100, 500, 400, 80)
+    xs, ys = [300, 300, 104, 600], [250, 105, 104, 250]
+    assert list(inside_polygon(xs, ys, outline)) == [point_in_polygon(x, y, outline) for x, y in zip(xs, ys)]
+    assert list(inside_polygon(xs, ys, outline)) == [True, True, False, False]
+
+
 def test_rounded_rectangle_follows_the_corners():
     outline = geo.rounded_rectangle(100, 100, 500, 400, 80)
     xs = [p[0] for p in outline]
@@ -91,5 +159,4 @@ def test_rounded_rectangle_follows_the_corners():
     assert point_in_polygon(300, 105, outline)          # middle of the top edge
     assert not point_in_polygon(104, 104, outline)      # the square corner is cut off
     assert point_in_polygon(104, 104, geo.rounded_rectangle(100, 100, 500, 400, 0))
-    import pytest
     assert geo.rounded_rectangle(0, 0, 10, 10, 999)[0] == pytest.approx((0.0, 5.0)), "radius limited to half the side"

@@ -21,12 +21,9 @@ TOOLS = [
      "Align frontlit to backlit (G)\nClick matching features on the two images of a row."),
     ("align_rows", "Align rows", "r",
      "Align reference row to current row (R)\nClick matching features in the top and bottom rows."),
-    ("outline", "Outline", "t",
-     "Filter outline (T)\nMark the edge of the filter membrane once, so the pinhole search "
-     "looks only inside it and ignores glints from the frame."),
     ("detect", "Find pinholes", "d",
-     "Find pinholes (D)\nSearch inside the filter outline for small bright spots and offer "
-     "them as markers."),
+     "Find pinholes (D)\nMark where the filter is, then see every small bright spot the search "
+     "finds there and add them as markers."),
     ("crop", "Crop export", "c",
      "Crop export (C)\nDrag a rectangle to export that region as an image."),
 ]
@@ -68,16 +65,28 @@ class ToolsMixin:
             self._layout_panes()
         self._press = None
         self._clear_tool_points(redraw=False)
-        if tool != "review":
-            self._candidates = []
-        if tool == "outline":
-            self._prepare_outline_tool()
-        cursor = {"pan": "fleur", "move": "hand2"}.get(tool, "crosshair")
+        if tool not in ("detect", "review"):
+            if self._detection is not None:
+                self.config.set("detect_sensitivity", self._sensitivity())
+            self._forget_detection()
+        if tool == "detect":
+            self._prepare_detect_tool()
         for pane in self.panes:
-            pane.canvas.config(cursor=cursor)
             pane.canvas.delete("rubber")
+        self._update_cursor()
         self._refresh_hint()
         self._draw_overlays()
+        if tool == "detect":
+            self._ensure_search()
+
+    def _update_cursor(self):
+        tool = self.tool_var.get()
+        if tool == "detect":
+            cursor = "crosshair" if self._outline_drawing() else "fleur"
+        else:
+            cursor = {"pan": "fleur", "review": "fleur", "move": "hand2"}.get(tool, "crosshair")
+        for pane in self.panes:
+            pane.canvas.config(cursor=cursor)
 
     def _reference_ready(self):
         return self.show_reference_var.get() and self.pairs[REFERENCE].has_any_image()
@@ -175,32 +184,35 @@ class ToolsMixin:
             ready = "  Ready: press Apply (Enter)." if can_apply else ""
             text = (f"{step}.  Mark at least 2 features, far apart.  {pairs} pair(s) so far.{ready}  "
                     "Align each row's frontlit image to its backlit image first.")
-        elif tool == "outline":
-            title = "Filter outline"
-            buttons = "outline"
-            if self.pairs[CURRENT].outline:
-                text = ("The dashed line is the filter outline.  Set Corner radius so the corners follow "
-                        "the rounded edge of the membrane, and Inset to pull the line just inside the "
-                        "edge so glints from the frame are left out.  Drag again to redraw it.  It is "
-                        "saved with the session and reused for later inspections of this filter.")
-            else:
-                text = ("Drag from one corner of the filter membrane to the opposite corner, as if its "
-                        "corners were square (the edge is easiest to see on the frontlit image).  You can "
-                        "then round the corners and pull the line inwards.  Level the image first so the "
-                        "filter is upright.")
         elif tool == "detect":
             title = "Find pinholes"
             buttons = "detect"
-            outline = self.effective_outline()
-            if outline and self.pairs[CURRENT].outline:
-                text = ("Press Search to look for small bright spots inside the filter outline.  "
-                        "(Or drag a rectangle to search just that area.)")
-            elif outline:
-                text = ("Press Search to look inside the outline carried over from the reference row "
-                        "(purple).  Or drag a rectangle to search just that area.")
+            if not self.pairs[CURRENT].has_image(BACKLIT):
+                text = "Load a backlit image first."
+            elif self._outline_drawing():
+                text = ("Say where the filter is: drag from one corner of the membrane to the opposite "
+                        "corner, as if its corners were square (the edge is easiest to see on the "
+                        "frontlit image).  The corners are then rounded by 'Corner radius', and 'Inset' "
+                        "pulls the line just inside the frame, so glints from the frame are left out.")
+            elif not self._detection_covers(self.effective_outline()):
+                text = "Press Search to look for small bright spots inside the dashed line."
             else:
-                text = ("No filter outline yet: use the Outline tool first so glints from the frame are "
-                        "ignored, or drag a rectangle here to search just that area.")
+                shown = self._review_candidates()
+                summary = self._candidate_summary
+                counts = [f"{sum(1 for c in shown if c['tier'] == tier)} {tier}"
+                          for tier in ("clear", "likely", "faint")]
+                text = (f"{len(shown)} spot(s) without a marker at this sensitivity, circled on the image: "
+                        f"{counts[0]} (green), {counts[1]} (yellow), {counts[2]} (orange).  ")
+                if summary.get("with_reference"):
+                    new = sum(1 for c in shown if not c["in_reference"])
+                    text += f"{new} of them are not in the reference image.  "
+                text += f"{summary.get('marked', 0)} spot(s) already have markers.  "
+                if summary.get("lonely"):
+                    text += f"{len(summary['lonely'])} marker(s) have no bright spot under them.  "
+                text += ("Scroll to zoom out and see them all; move Sensitivity to offer more or fewer.  "
+                         "Adjust Corner radius and Inset until the dashed line follows the filter edge"
+                         + ("." if self.pairs[CURRENT].outline else
+                            " (it is purple because it was carried over from the reference row)."))
         elif tool == "review":
             title = "Review candidates"
             buttons = "review"
@@ -215,7 +227,7 @@ class ToolsMixin:
                     about += (" Also in the reference image." if candidate["in_reference"]
                               else " NOT in the reference image: new since then.")
             text = (f"Candidate {min(self._candidate_index + 1, len(pending))} of {len(pending)} "
-                    f"(yellow circle).  {about}  Accept = Enter, unsure = U (marked with a ?), "
+                    f"(thick dashed circle).  {about}  Accept = Enter, unsure = U (marked with a ?), "
                     "skip = S, not a pinhole = X.")
         else:
             title = "Crop export"
@@ -247,8 +259,10 @@ class ToolsMixin:
             ann_index = self._annotation_at(event.x, event.y)
             if ann_index is not None:
                 mode = "move_ann"
-        elif tool in ("level", "crop", "detect", "outline") and not self._pane_is_empty(pane):
+        elif tool in ("level", "crop") and not self._pane_is_empty(pane):
             mode = tool
+        elif tool == "detect" and self._outline_drawing() and not self._pane_is_empty(pane):
+            mode = "outline"
         self._press = {
             "pane": pane, "x": event.x, "y": event.y, "last": (event.x, event.y),
             "dragging": False, "mode": mode, "ann": ann_index,
@@ -279,12 +293,19 @@ class ToolsMixin:
             canvas.delete("rubber")
             canvas.create_line(press["x"], press["y"], event.x, event.y,
                                fill="#ffff44", width=self.px(2), dash=(6, 4), tags="rubber")
-        elif mode in ("crop", "detect", "outline"):
+        elif mode == "crop":
             for pane in self.visible_panes():
                 pane.canvas.delete("rubber")
                 pane.canvas.create_rectangle(press["x"], press["y"], event.x, event.y,
                                              outline="#ffcc88", width=self.px(1), dash=(6, 4),
                                              tags="rubber")
+        elif mode == "outline":
+            flat = [value for point in self._outline_rubber(press["x"], press["y"], event.x, event.y)
+                    for value in point]
+            for pane in self.visible_panes():
+                pane.canvas.delete("rubber")
+                pane.canvas.create_polygon(*flat, outline="#4fd0ff", fill="", width=self.px(2),
+                                           dash=(8, 5), tags="rubber")
         self._move_crosshair(event.x, event.y)
 
     def _on_release(self, event):
@@ -303,11 +324,6 @@ class ToolsMixin:
                 y0, y1 = sorted((press["y"], event.y))
                 if x1 - x0 >= 8 and y1 - y0 >= 8:
                     self.show_export_preview(x0, y0, x1, y1)
-            elif mode == "detect":
-                x0, x1 = sorted((press["x"], event.x))
-                y0, y1 = sorted((press["y"], event.y))
-                if x1 - x0 >= 8 and y1 - y0 >= 8:
-                    self.find_pinholes_in((x0, y0, x1, y1))
             elif mode == "outline":
                 if abs(event.x - press["x"]) >= 8 and abs(event.y - press["y"]) >= 8:
                     self._set_outline_from_drag(pane, press["x"], press["y"], event.x, event.y)
@@ -433,6 +449,11 @@ class ToolsMixin:
             return "break"
         if self.tool_var.get() == "review":
             self._finish_review()
+            return "break"
+        if self.tool_var.get() == "detect" and self._outline_redraw and self._outline_rect is not None:
+            self._outline_redraw = False
+            self._update_cursor()
+            self._refresh_hint()
             return "break"
         n_first, n_second = self._point_counts()
         if self.tool_var.get() in ("align", "align_rows") and (n_first or n_second):

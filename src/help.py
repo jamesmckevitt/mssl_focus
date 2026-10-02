@@ -62,22 +62,26 @@ GUIDE = [
         "to drag a marker.  Ctrl+Z undoes any change.",
     ]),
     ("5.  Let the software find pinholes", [
-        "- First mark the filter outline, once per filter: choose Outline (T) and drag from one "
-        "corner of the membrane to the opposite corner.  Set Corner radius so the line follows the "
-        "rounded corners, and Inset to pull it just inside the edge, so glints from the frame are "
-        "left out.  The outline is saved with the session and carried to later inspections through "
-        "the reference row.",
-        "- Choose Find pinholes (D) and press Search.  Small bright spots inside the outline that "
-        "have no marker are sorted into clear, likely and faint.",
-        "- 'Accept clear' adds markers for all the clear spots in one go.  The likely ones are then "
-        "shown one at a time in a yellow circle: Enter accepts, S skips, X rejects, and Esc stops.",
+        "- Choose Find pinholes (D).  The first time, say where the filter is: drag from one corner "
+        "of the membrane to the opposite corner.  A second line of controls appears in the blue bar.",
+        "- Search area: raise 'Corner radius' until the dashed line follows the rounded corners of "
+        "the filter, and use 'Inset' to pull it just inside the edge, so glints from the frame are "
+        "left out.  'Redraw' lets you drag it out again.  The area is saved with the session and "
+        "carried to later inspections through the reference row (shown in purple).",
+        "- Every small bright spot inside the area that has no marker is circled: green for clear, "
+        "yellow for likely, orange for faint.  Zoom out to see them all.",
+        "- Sensitivity: move the slider and the circles update at once.  50 offers only unmistakable "
+        "spots, 75 also likely ones, 100 everything (the faintest are mostly noise).",
+        "- 'Add all' puts a marker on every circled spot in one go.  'Review one by one' shows each "
+        "in turn, zoomed in: Enter accepts, S skips, X rejects, and Esc returns to the overview.",
         "- Not sure?  Press U: the marker is added with a question mark after its label and counted "
         "as 'unsure' in the legend.  Right-click a marker later to confirm it.",
-        "- Faint spots are mostly noise and are left out; tick 'Include faint' to step through "
-        "them as well.",
         "- With a reference row loaded and aligned, spots that are not in the earlier image come "
-        "first and are labelled as new; tick 'Only new since reference' to see just those.  The "
-        "status bar also lists existing markers that have no bright spot under them.",
+        "first and are labelled as new; tick 'Only new since reference' to see just those.",
+        "- 'Centre markers on pinholes' moves each existing marker onto the bright spot inside its "
+        "circle, for example after copying markers from the reference row.  Markers with no spot "
+        "are left alone and listed in the status bar.  For a single marker, right-click it and "
+        "choose 'Centre on the bright spot'.",
         "- The search suggests; you decide.  Check candidates against the frontlit image, since dust "
         "and glints can also look bright.",
     ]),
@@ -131,7 +135,6 @@ SHORTCUTS = [
         ("L", "Level (make upright)"),
         ("G", "Align frontlit to backlit"),
         ("R", "Align reference row to current row"),
-        ("T", "Filter outline"),
         ("D", "Find pinholes"),
         ("C", "Crop export"),
         ("Esc", "Clear points, or return to Pan"),

@@ -8,6 +8,7 @@ from . import theme
 from .annotations import PRESET_COLOURS
 import numpy as np
 
+from .detect import DEFAULT_SENSITIVITY
 from .imaging import RAW_NOISE_LEVELS, build_lut, is_raw, match_tone
 from .help import show_about, show_guide, show_shortcuts
 from .pair import BACKLIT, FRONTLIT
@@ -100,9 +101,12 @@ class UIBuilderMixin:
         self.frames_info_var = tk.StringVar()
         self.dark_info_var = tk.StringVar()
         self.raw_noise_var = tk.StringVar(value="Standard")
-        self.detect_sensitivity_var = tk.StringVar(value="Normal")
+        try:
+            sensitivity = min(100.0, max(0.0, float(self.config.get("detect_sensitivity", DEFAULT_SENSITIVITY))))
+        except (TypeError, ValueError):
+            sensitivity = float(DEFAULT_SENSITIVITY)
+        self.detect_sensitivity_var = tk.DoubleVar(value=sensitivity)
         self.detect_new_only_var = tk.BooleanVar(value=False)
-        self.detect_faint_var = tk.BooleanVar(value=False)
         self.outline_radius_var = tk.StringVar(value="200")
         self.outline_inset_var = tk.StringVar(value="0")
 
@@ -155,10 +159,9 @@ class UIBuilderMixin:
         edit_menu.add_command(label="Undo", accelerator="Ctrl+Z", command=self.undo)
         edit_menu.add_command(label="Redo", accelerator="Ctrl+Y", command=self.redo)
         edit_menu.add_separator()
-        edit_menu.add_command(label="Set filter outline...", accelerator="T",
-                              command=lambda: self.set_tool("outline"))
         edit_menu.add_command(label="Find pinholes...", accelerator="D",
                               command=lambda: self.set_tool("detect"))
+        edit_menu.add_command(label="Centre markers on pinholes", command=self.centre_markers)
         edit_menu.add_command(label="Copy markers from reference row...", command=self.copy_reference_annotations)
         edit_menu.add_command(label="Clear all markers...", command=self.clear_annotations)
         menubar.add_cascade(label="Edit", menu=edit_menu)
@@ -269,9 +272,11 @@ class UIBuilderMixin:
         Tooltip(guide, "Step-by-step guide to an inspection (F1)")
 
     def _build_hint_bar(self):
-        bar = ttk.Frame(self.root, style="Hint.TFrame")
+        self.hint_bar = ttk.Frame(self.root, style="Hint.TFrame")
+        self.hint_bar.pack(side=tk.TOP, fill=tk.X)
+        bar = ttk.Frame(self.hint_bar, style="Hint.TFrame")
         bar.pack(side=tk.TOP, fill=tk.X)
-        self.hint_bar = bar
+        self._build_search_bar()
         pad_y = self.px(6)
         ttk.Label(bar, textvariable=self.hint_title_var, style="HintTitle.TLabel").pack(
             side=tk.LEFT, padx=(self.px(12), self.px(10)), pady=pad_y)
@@ -290,36 +295,15 @@ class UIBuilderMixin:
                                             command=self._clear_tool_points, takefocus=False)
         self.hint_apply = ttk.Button(self.hint_actions, text="Apply", style="Accent.TButton",
                                      command=self.apply_tool_points, takefocus=False)
-        self.hint_done = ttk.Button(self.hint_actions, text="Done", command=lambda: self.set_tool("pan"),
-                                    takefocus=False)
+        self.hint_done = ttk.Button(self.hint_actions, text="Done", command=self._on_hint_done, takefocus=False)
         self.hint_search = ttk.Button(self.hint_actions, text="Search", style="Accent.TButton",
-                                      command=self.find_pinholes_in, takefocus=False)
-        self.hint_outline_widgets = []
-        for label, var, low, high, step, tip in (
-            ("Corner radius", self.outline_radius_var, 0, 3000, 10,
-             "How rounded the corners of the outline are, in image pixels."),
-            ("Inset", self.outline_inset_var, -500, 1000, 2,
-             "Shrinks the outline evenly, in image pixels, to keep it just inside the frame edge."),
-        ):
-            name = ttk.Label(self.hint_actions, text=label, style="Hint.TLabel")
-            box = ttk.Spinbox(self.hint_actions, textvariable=var, from_=low, to=high, increment=step,
-                              width=6, command=self._rebuild_outline)
-            box.bind("<Return>", lambda _e: (self._rebuild_outline(), self.panes[0].canvas.focus_set()))
-            box.bind("<FocusOut>", lambda _e: self._rebuild_outline())
-            Tooltip(box, tip)
-            self.hint_outline_widgets += [name, box]
-        self.hint_clear_outline = ttk.Button(self.hint_actions, text="Clear outline",
-                                             command=self.clear_outline, takefocus=False)
-        self.hint_find = ttk.Button(self.hint_actions, text="Find pinholes", style="Accent.TButton",
-                                    command=lambda: self.set_tool("detect"), takefocus=False)
-        self.hint_faint = ttk.Checkbutton(self.hint_actions, text="Include faint", variable=self.detect_faint_var,
-                                          style="Hint.TCheckbutton", takefocus=False,
-                                          command=self._on_new_only_toggle)
-        Tooltip(self.hint_faint, "Also step through the faint spots.  Most are noise, but the very "
-                                 "faintest pinholes are among them.")
-        self.hint_new_only = ttk.Checkbutton(self.hint_actions, text="Only new since reference",
-                                             variable=self.detect_new_only_var, style="Hint.TCheckbutton",
-                                             takefocus=False, command=self._on_new_only_toggle)
+                                      command=self.search_pinholes, takefocus=False)
+        self.hint_review = ttk.Button(self.hint_actions, text="Review one by one", style="Accent.TButton",
+                                      command=self.start_review, takefocus=False)
+        Tooltip(self.hint_review, "Step through the circled spots, zoomed in, and decide on each.")
+        self.hint_add_all = ttk.Button(self.hint_actions, text="Add all", command=self.add_all_shown,
+                                       takefocus=False)
+        Tooltip(self.hint_add_all, "Add a marker for every circled spot in one go.  Ctrl+Z undoes it.")
         self.hint_accept = ttk.Button(self.hint_actions, text="Accept", style="Accent.TButton",
                                       command=self.review_accept, takefocus=False)
         self.hint_unsure = ttk.Button(self.hint_actions, text="Unsure (?)", command=self.review_unsure,
@@ -340,27 +324,125 @@ class UIBuilderMixin:
         self.hint_label.bind("<Configure>",
                              lambda e: self.hint_label.configure(wraplength=max(200, e.width - self.px(8))))
 
-    def _on_new_only_toggle(self):
-        self._candidate_index = 0
-        self._show_candidate()
+    def _build_search_bar(self):
+        """Second line of the guidance bar, shown while finding pinholes: where to look and how hard."""
+        bar = ttk.Frame(self.hint_bar, style="Hint.TFrame")
+        self.search_bar = bar
+        pad = self.px(3)
+
+        def separator():
+            ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=self.px(12), pady=self.px(4))
+
+        ttk.Label(bar, text="Search area", style="HintTitle.TLabel").pack(side=tk.LEFT, padx=(self.px(12), pad))
+        self.outline_boxes = []
+        for label, var, low, high, step, tip in (
+            ("Corner radius", self.outline_radius_var, 0, 3000, 10,
+             "How rounded the corners of the search area are, in image pixels.\n"
+             "Raise it until the dashed line follows the rounded corners of the filter."),
+            ("Inset", self.outline_inset_var, -500, 1000, 2,
+             "Shrinks the search area evenly, in image pixels, to keep it just inside the frame edge.\n"
+             "Negative values grow it."),
+        ):
+            ttk.Label(bar, text=label, style="Hint.TLabel").pack(side=tk.LEFT, padx=(self.px(8), pad))
+            box = ttk.Spinbox(bar, textvariable=var, from_=low, to=high, increment=step,
+                              width=6, command=self._rebuild_outline)
+            box.pack(side=tk.LEFT, padx=pad)
+            box.bind("<Return>", lambda _e: (self._rebuild_outline(), self.panes[0].canvas.focus_set()))
+            box.bind("<FocusOut>", lambda _e: self._rebuild_outline())
+            Tooltip(box, tip)
+            self.outline_boxes.append(box)
+        self.redraw_outline_button = ttk.Button(bar, text="Redraw", style="Small.TButton",
+                                                command=self.redraw_outline, takefocus=False)
+        self.redraw_outline_button.pack(side=tk.LEFT, padx=(self.px(8), pad))
+        Tooltip(self.redraw_outline_button, "Drag out the search area again, corner to corner.")
+        self.clear_outline_button = ttk.Button(bar, text="Clear", style="Small.TButton",
+                                               command=self.clear_outline, takefocus=False)
+        self.clear_outline_button.pack(side=tk.LEFT, padx=pad)
+
+        separator()
+        ttk.Label(bar, text="Sensitivity", style="HintTitle.TLabel").pack(side=tk.LEFT, padx=(0, pad))
+        scale = ttk.Scale(bar, from_=0, to=100, variable=self.detect_sensitivity_var, length=self.px(240),
+                          style="Hint.Horizontal.TScale", command=self._on_detect_filter_changed)
+        scale.pack(side=tk.LEFT, padx=self.px(6))
+        tip = ("How faint a spot may be and still be offered.\n"
+               "50: only unmistakable spots.  75: also likely ones.  100: everything, including\n"
+               "the faintest, most of which are noise.  The circles on the image update as you move it.")
+        Tooltip(scale, tip)
+        text = tk.StringVar()
+        entry = ttk.Entry(bar, textvariable=text, width=4, justify=tk.RIGHT)
+        entry.pack(side=tk.LEFT, padx=pad)
+        Tooltip(entry, tip)
+
+        def show(*_):
+            try:
+                text.set(f"{float(self.detect_sensitivity_var.get()):.0f}")
+            except (tk.TclError, ValueError):
+                pass
+
+        def commit(_event=None):
+            try:
+                value = min(100.0, max(0.0, float(text.get().replace(",", "."))))
+            except ValueError:
+                show()
+                return
+            if abs(value - float(self.detect_sensitivity_var.get())) > 1e-9:
+                self.detect_sensitivity_var.set(value)
+                self._on_detect_filter_changed()
+            show()
+
+        self.detect_sensitivity_var.trace_add("write", show)
+        show()
+        entry.bind("<Return>", lambda _e: (commit(), self.panes[0].canvas.focus_set()))
+        entry.bind("<KP_Enter>", lambda _e: (commit(), self.panes[0].canvas.focus_set()))
+        entry.bind("<FocusOut>", commit)
+        entry.bind("<Escape>", lambda _e: (show(), self.panes[0].canvas.focus_set()))
+        self.slider_inputs["Sensitivity"] = (text, commit)
+
+        self.hint_new_only = ttk.Checkbutton(bar, text="Only new since reference",
+                                             variable=self.detect_new_only_var, style="Hint.TCheckbutton",
+                                             takefocus=False, command=self._on_detect_filter_changed)
+        Tooltip(self.hint_new_only, "Offer only spots that are not in the reference row's backlit image.")
+
+        self.centre_markers_button = ttk.Button(bar, text="Centre markers on pinholes", style="Small.TButton",
+                                                command=self.centre_markers, takefocus=False)
+        self.centre_markers_button.pack(side=tk.RIGHT, padx=(pad, self.px(10)), pady=self.px(4))
+        Tooltip(self.centre_markers_button,
+                "Move each existing marker onto the bright spot inside its circle, for example after\n"
+                "copying markers from the reference row.  Markers with no spot stay where they are.\n"
+                "Uses the spots allowed by Sensitivity.  For one marker, right-click it instead.")
+
+    def _on_hint_done(self):
+        if self.tool_var.get() == "review":
+            self._finish_review()
+        else:
+            self.set_tool("pan")
 
     def _set_hint_buttons(self, kind, can_apply):
         for widget in self.hint_actions.winfo_children():
             widget.pack_forget()
         tool = self.tool_var.get()
         pad = self.px(3)
-        if kind == "outline":
-            for widget in self.hint_outline_widgets:
+        searching = kind in ("detect", "review") and self.pairs[CURRENT].has_image(BACKLIT)
+        if searching:
+            self.search_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, self.px(4)))
+            self.redraw_outline_button.state(["disabled"] if self._outline_drawing() else ["!disabled"])
+            self.clear_outline_button.state(["!disabled"] if self.pairs[CURRENT].outline else ["disabled"])
+            if self._reference_ready() and self.pairs[REFERENCE].has_image(BACKLIT):
+                self.hint_new_only.pack(side=tk.LEFT, padx=(self.px(14), pad))
+            else:
+                self.hint_new_only.pack_forget()
+        else:
+            self.search_bar.pack_forget()
+        if kind == "detect" and searching:
+            outline = self.effective_outline()
+            if outline and not self._detection_covers(outline):
+                self.hint_search.pack(side=tk.LEFT, padx=pad)
+            shown = len(self._review_candidates())
+            self.hint_add_all.configure(text=f"Add all {shown}")
+            for widget in (self.hint_review, self.hint_add_all):
                 widget.pack(side=tk.LEFT, padx=pad)
-            self.hint_clear_outline.pack(side=tk.LEFT, padx=(self.px(10), pad))
-            self.hint_find.pack(side=tk.LEFT, padx=pad)
-        elif kind == "detect":
-            self.hint_search.pack(side=tk.LEFT, padx=pad)
-            self.hint_search.state(["!disabled"] if self.effective_outline() else ["disabled"])
+                widget.state(["!disabled"] if shown else ["disabled"])
         elif kind == "review":
-            self.hint_faint.pack(side=tk.LEFT, padx=(pad, self.px(6)))
-            if self._candidate_summary.get("with_reference"):
-                self.hint_new_only.pack(side=tk.LEFT, padx=(pad, self.px(10)))
             clear = sum(1 for c in self._review_candidates() if c["tier"] == "clear")
             self.hint_accept_clear.configure(text=f"Accept {clear} clear")
             self.hint_accept_clear.state(["!disabled"] if clear else ["disabled"])

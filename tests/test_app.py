@@ -9,6 +9,7 @@ import pytest
 
 from src import geometry as geo
 from src.config import Config
+from src.detect import point_in_polygon
 from src.pair import BACKLIT, FRONTLIT
 from src.session import read_session
 from tests.helpers import click, dot_centroid, drag, make_filter_image, wait_idle, write_json
@@ -386,10 +387,13 @@ def test_found_pinholes_are_reviewed_one_by_one(app, tmp_path):
     canvas = pane(app, 0, BACKLIT).canvas
     drag(app, pane(app, 0, BACKLIT), (2, 2), (canvas.winfo_width() - 2, canvas.winfo_height() - 2))
     wait_idle(app)
-    assert app.tool_var.get() == "review"
+    assert app.tool_var.get() == "detect", "dragging out the search area shows what was found"
     assert len(app._review_candidates()) == len(DOTS) - 1, "the marked spot must not be offered again"
     assert app._candidate_summary["marked"] == 1
 
+    app.start_review()
+    wait_idle(app)
+    assert app.tool_var.get() == "review"
     first = dict(app._current_candidate())
     app.review_accept()
     wait_idle(app)
@@ -400,6 +404,10 @@ def test_found_pinholes_are_reviewed_one_by_one(app, tmp_path):
     app.review_skip()
     wait_idle(app)
     assert len(app._review_candidates()) == len(DOTS) - 3
+    app._on_escape()
+    wait_idle(app)
+    assert app.tool_var.get() == "detect", "Esc leaves the review for the overview"
+    assert len(app._review_candidates()) == len(DOTS) - 3, "the rejected spot is not offered again"
     app._on_escape()
     assert app.tool_var.get() == "pan" and app._candidates == []
     assert len(app.pairs[0].annotations) == 2
@@ -439,6 +447,11 @@ def test_new_pinholes_are_offered_first_when_a_reference_is_loaded(app, tmp_path
     assert new_positions == pytest.approx(expected, abs=1)
     app.detect_new_only_var.set(True)
     assert len(app._review_candidates()) == 2
+
+    # Moving the row alignment is noticed: the search is repeated rather than trusted.
+    assert app._detection_covers(app.effective_outline())
+    app.set_row_matrix(geo.translation(300, 0) @ app.row_matrix())
+    assert not app._detection_covers(app.effective_outline())
 
 
 def test_reference_images_are_only_offered_when_there_is_a_reference_row(app, tmp_path):
@@ -864,7 +877,8 @@ def _stage_with_edge_glints(folder, faint=()):
 
 
 def _draw_outline(app, radius="60", inset="6"):
-    app.set_tool("outline")
+    """Drag out the search area in the Find pinholes tool; the search then runs by itself."""
+    app.set_tool("detect")
     app.outline_radius_var.set(radius)
     app.outline_inset_var.set(inset)
     target = pane(app, 0, BACKLIT)
@@ -872,7 +886,7 @@ def _draw_outline(app, radius="60", inset="6"):
     wait_idle(app)
 
 
-def test_the_filter_outline_keeps_frame_glints_out_of_the_search(app, tmp_path):
+def test_the_search_area_keeps_frame_glints_out_of_the_search(app, tmp_path):
     stage = _stage_with_edge_glints(tmp_path / "1_incoming" / "em9", faint=[(700, 500)])
     load_stage(app, stage)
     _draw_outline(app)
@@ -880,34 +894,101 @@ def test_the_filter_outline_keeps_frame_glints_out_of_the_search(app, tmp_path):
     xs, ys = [p[0] for p in outline], [p[1] for p in outline]
     assert (min(xs), max(xs)) == pytest.approx((206, 994), abs=1.5)
     assert (min(ys), max(ys)) == pytest.approx((156, 644), abs=1.5)
+    assert not point_in_polygon(210, 160, outline), "the square corner is cut off by the rounding"
 
-    app.set_tool("detect")
-    app.find_pinholes_in()
-    wait_idle(app)
-    assert app.tool_var.get() == "review"
+    assert app.tool_var.get() == "detect"
     found = sorted((int(c["x"]), int(c["y"])) for c in app._candidates if c["tier"] == "clear")
     assert found == sorted(DOTS)
     assert [c["tier"] for c in app._candidates].count("faint") == 1
-    assert len(app._review_candidates()) == len(DOTS), "faint spots are left out unless asked for"
+    assert len(app._review_candidates()) == len(DOTS), "faint spots are left out at the usual sensitivity"
 
-    # One press adds all the clear ones; nothing is left, so the review ends.
-    app.review_accept_clear()
+    # With square corners and no inset the glints on the frame come in; no new search is needed.
+    searched = app._detection
+    app._last_checkpoint = (None, 0.0)     # as if a moment had passed since the drag
+    app.outline_radius_var.set("0")
+    app.outline_inset_var.set("-6")
+    app._rebuild_outline()
+    wait_idle(app)
+    assert app._detection is searched
+    assert len(app._review_candidates()) == len(DOTS) + 6
+    app.undo()
+    wait_idle(app)
+    assert len(app._review_candidates()) == len(DOTS)
+    assert (app.outline_radius_var.get(), app.outline_inset_var.get()) == ("60", "0")
+
+    # Once the area is drawn, dragging pans; 'Redraw' makes the next drag draw again.
+    before = (app.pan_x, list(app.pairs[0].outline))
+    target = pane(app, 0, BACKLIT)
+    drag(app, target, (300, 300), (340, 300))
+    assert app.pan_x == pytest.approx(before[0] + 40) and app.pairs[0].outline == before[1]
+    drag(app, target, (340, 300), (300, 300))
+    app.redraw_outline()
+    drag(app, target, app.image_to_canvas(0, BACKLIT, 400, 300), app.image_to_canvas(0, BACKLIT, 800, 600))
+    wait_idle(app)
+    assert sorted((int(c["x"]), int(c["y"])) for c in app._review_candidates()) == [DOTS[2]]
+    app.undo()
+    wait_idle(app)
+
+    # The slider changes what is offered at once, and an exact value can be typed.
+    app.detect_sensitivity_var.set(100.0)
+    app._on_detect_filter_changed()
+    assert len(app._review_candidates()) == len(DOTS) + 1
+    text, commit = app.slider_inputs["Sensitivity"]
+    assert text.get() == "100"
+    text.set("75")
+    commit()
+    assert app.detect_sensitivity_var.get() == 75.0
+    assert len(app._review_candidates()) == len(DOTS)
+
+    # One press adds everything on offer.
+    app.add_all_shown()
     wait_idle(app)
     assert len(app.pairs[0].annotations) == len(DOTS)
-    assert app.tool_var.get() == "pan"
+    assert app.tool_var.get() == "detect" and app._review_candidates() == []
 
     # The faint one can still be stepped through on request.
-    app.detect_faint_var.set(True)
-    app.set_tool("detect")
-    app.find_pinholes_in()
-    wait_idle(app)
+    app.detect_sensitivity_var.set(100.0)
+    app._on_detect_filter_changed()
     assert [(int(c["x"]), int(c["y"]), c["tier"]) for c in app._review_candidates()] == [(700, 500, "faint")]
     assert app._candidate_summary["marked"] == len(DOTS)
-    app._on_escape()
+    app.set_tool("pan")
+    assert app.config.get("detect_sensitivity") == 100.0, "the setting is remembered for next time"
 
     # Undo takes all five automatic markers away in one step.
     app.undo()
     assert app.pairs[0].annotations == []
+
+
+def test_markers_can_be_centred_on_the_spots_they_mark(app, tmp_path):
+    load_stage(app, _stage_with_edge_glints(tmp_path / "1_incoming" / "em9", faint=[(700, 500)]))
+    app.set_tool("annotate")
+    offsets = [(7, -5), (-9, 4), (0, 0), (6, 8), (-4, -6)]
+    for (x, y), (dx, dy) in zip(DOTS, offsets):
+        click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, x + 0.5 + dx, y + 0.5 + dy))
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, 450, 300))        # on nothing
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, 706.5, 496.5))    # near the faint spot
+
+    def positions():
+        return [(m["img1_x"], m["img1_y"]) for m in app.pairs[0].annotations]
+
+    before = positions()
+    assert math.dist(before[0], (DOTS[0][0] + 0.5, DOTS[0][1] + 0.5)) > 5
+
+    app.centre_markers()
+    wait_idle(app)
+    for (x, y), found in zip(DOTS, positions()):
+        assert found == pytest.approx((x + 0.5, y + 0.5), abs=0.6)
+    assert positions()[5:] == before[5:], "no spot, or only a faint one: the marker stays put"
+    assert "P6" in app.status_var.get() and "P7" in app.status_var.get()
+
+    # Asked for one marker in particular, even a faint spot will do.
+    app.centre_markers([6])
+    wait_idle(app)
+    assert positions()[6] == pytest.approx((700.5, 500.5), abs=0.8)
+
+    app.undo()
+    app.undo()
+    assert positions() == before, "one undo per press"
 
 
 def test_outline_is_saved_and_carried_to_the_next_inspection(app, tmp_path):
@@ -949,14 +1030,14 @@ def test_outline_is_saved_and_carried_to_the_next_inspection(app, tmp_path):
     assert carried[0] == pytest.approx((saved_outline[0][0] + shift[0], saved_outline[0][1] + shift[1]), abs=1.0)
 
     app.set_tool("detect")
-    app.find_pinholes_in()
     wait_idle(app)
     assert len(app._candidates) == len(DOTS), "the glints on the frame are outside the carried outline"
+    assert app.pairs[0].outline == [], "looking does not copy the outline"
+    assert (app.outline_radius_var.get(), app.outline_inset_var.get()) == ("60", "0")
 
     app._on_escape()
     app.copy_reference_annotations()
     assert len(app.pairs[0].outline) == len(saved_outline), "copying the markers brings the outline too"
     app.set_tool("detect")
-    app.find_pinholes_in()
     wait_idle(app)
     assert app._candidate_summary["lonely"] == ["P1"], "the copied marker with nothing under it is reported"

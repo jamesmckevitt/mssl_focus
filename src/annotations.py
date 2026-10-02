@@ -125,6 +125,7 @@ class AnnotationMixin:
         menu.add_command(label="Edit label...", command=lambda: self._edit_annotation_label(index))
         menu.add_command(label="Mark as confirmed" if ann.get("unsure") else "Mark as unsure (?)",
                          command=lambda: self._toggle_annotation_unsure(index))
+        menu.add_command(label="Centre on the bright spot", command=lambda: self.centre_markers([index]))
         menu.add_command(label="Change to current colour", command=lambda: self._recolour_annotation(index))
         menu.add_command(label="Set radius to current size", command=lambda: self._resize_annotation(index))
         try:

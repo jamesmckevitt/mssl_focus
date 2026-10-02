@@ -136,6 +136,8 @@ def apply_theme(root):
 
     style.configure("Horizontal.TScale", background=PANEL, troughcolor=FIELD,
                     bordercolor=BORDER, lightcolor=ACCENT_DARK, darkcolor=ACCENT_DARK)
+    style.configure("Hint.Horizontal.TScale", background=HINT_BG, troughcolor=FIELD,
+                    bordercolor=BORDER, lightcolor=ACCENT_DARK, darkcolor=ACCENT_DARK)
     style.configure("TScrollbar", background=PANEL_ALT, troughcolor=PANEL, bordercolor=PANEL,
                     arrowcolor=MUTED, lightcolor=PANEL_ALT, darkcolor=PANEL_ALT)
     style.map("TScrollbar", background=[("active", "#4a4f57")])

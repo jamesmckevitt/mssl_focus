@@ -4,6 +4,8 @@ import math
 
 import numpy as np
 
+from . import geometry as geo
+
 # How sure the search is about a spot, strictest first.  A spot gets the first
 # tier whose test it passes: (name, threshold in local noise sigmas, minimum
 # contrast in 8-bit levels).  Checked against hand-made maps, "clear" spots were
@@ -14,6 +16,26 @@ TIERS = [
     ("faint", 4.5, 14.0),
 ]
 TIER_ORDER = {name: n for n, (name, _s, _c) in enumerate(TIERS)}
+
+# Every spot also gets a continuous score on which the faint, likely and clear
+# thresholds are 1, 2 and 3.  The sensitivity setting (0-100) picks the lowest
+# score offered: 50 = only clear spots, 75 = clear and likely, 100 = everything.
+DEFAULT_SENSITIVITY = 75
+_SIGMAS = [sigmas for _n, sigmas, _c in reversed(TIERS)]
+_CONTRASTS = [contrast for _n, _s, contrast in reversed(TIERS)]
+
+
+def minimum_score(sensitivity):
+    return 1.0 + (100.0 - min(100.0, max(0.0, float(sensitivity)))) / 25.0
+
+
+def _level(value, faint, likely, clear):
+    """Where ``value`` falls on the scale on which the three thresholds are 1, 2 and 3."""
+    if value <= 0:
+        return 0.0
+    if value < likely:
+        return 1.0 + math.log(value / faint) / math.log(likely / faint)
+    return 2.0 + math.log(value / likely) / math.log(clear / likely)
 
 MIN_AREA = 3          # pixels; smaller is indistinguishable from sensor noise
 MAX_AREA = 900        # larger is a tear, an edge or stray light, not a pinhole
@@ -74,19 +96,20 @@ def find_pinholes(image, mask=None, limit=4000):
         peak = float(patch.max())
         cx, cy = float(centroids[i][0]), float(centroids[i][1])
         local_noise = float(noise_after_blur[min(height - 1, int(cy)), min(width - 1, int(cx))])
-        # A tier needs a few pixels above its own threshold, so a single hot
-        # pixel, however bright, never counts as more than faint.
-        tier = next((name for name, sigmas, contrast in TIERS[:-1]
-                     if int((patch > max(sigmas * local_noise, contrast)).sum()) >= MIN_AREA), TIERS[-1][0])
+        # Scored on its third-brightest pixel: a tier needs a few pixels above its
+        # threshold, so a single hot pixel, however bright, never counts as more than faint.
+        third = float(np.sort(patch, axis=None)[-MIN_AREA])
+        score = max(1.0, min(_level(third / local_noise, *_SIGMAS), _level(third, *_CONTRASTS)))
         candidates.append({
             "x": cx + 0.5,
             "y": cy + 0.5,
             "radius": max(1.5, math.sqrt(area / math.pi)),
             "peak": peak,
             "snr": peak / local_noise,
-            "tier": tier,
+            "score": score,
+            "tier": "clear" if score > 3.0 else "likely" if score > 2.0 else "faint",
         })
-    candidates.sort(key=lambda c: (TIER_ORDER[c["tier"]], -c["peak"]))
+    candidates.sort(key=lambda c: -c["score"])
     return candidates[:limit], len(candidates)
 
 
@@ -112,6 +135,85 @@ def markers_without_a_spot(markers, candidates, tolerance=12.0):
     return lonely
 
 
+def match_markers_to_spots(markers, candidates, tolerance=12.0, reach=1.0):
+    """Pair each marker (``(x, y, radius)``) with the spot it most plausibly marks.
+
+    Returns ``{marker index: candidate}``.  A spot goes to one marker only, the
+    nearest; a clear or likely spot wins over a faint one.  A spot counts if it is
+    inside the marker's circle; ``reach`` widens that, in radii, for clear and
+    likely spots (faint ones are too common to trust further out).
+    """
+    pairs = []
+    for m, (x, y, radius) in enumerate(markers):
+        near = max(radius, tolerance)
+        for c, candidate in enumerate(candidates):
+            distance = math.hypot(candidate["x"] - x, candidate["y"] - y)
+            faint = candidate["tier"] == "faint"
+            if distance <= near * (1.0 if faint else reach):
+                pairs.append((faint, distance, m, c))
+    pairs.sort()
+    matched, used = {}, set()
+    for _faint, _distance, m, c in pairs:
+        if m not in matched and c not in used:
+            matched[m] = candidates[c]
+            used.add(c)
+    return matched
+
+
+def realign_markers(markers, candidates, tolerance=12.0):
+    """Where each marker (``(x, y, radius)``) should sit so that it is on its spot.
+
+    A marker is centred on the spot inside its circle.  Markers copied from an
+    earlier inspection are often all off in the same way, further than their own
+    radius, because the filter sat slightly differently in front of the camera.
+    So the shift and rotation the markers have in common is worked out first,
+    from the markers whose spot is plain to see, and a spot also counts if it is
+    inside the circle once that correction is made.  A marker with no spot is
+    left exactly where it is.
+
+    Returns ``(positions, matched)``: the new ``(x, y)`` of each marker and the
+    indices of those now sitting on a spot.
+    """
+    drift = geo.identity()
+    seeds = match_markers_to_spots(markers, candidates, tolerance, reach=2.0)
+    if len(seeds) >= 4:
+        src = np.array([markers[m][:2] for m in seeds], dtype=float)
+        dst = np.array([(c["x"], c["y"]) for c in seeds.values()], dtype=float)
+        try:
+            for _attempt in range(3):
+                matrix, rms = geo.fit_similarity(src, dst, allow_scale=False)
+                residual = np.hypot(*(geo.apply_many(matrix, src) - dst).T)
+                keep = residual <= max(3.0, 2.5 * float(np.median(residual)))
+                if keep.all() or keep.sum() < 4:
+                    break
+                src, dst = src[keep], dst[keep]     # a marker that grabbed the wrong spot
+            # Only trust it if the markers really are off together: the common correction
+            # must account for most of the distance between the markers and their spots.
+            apart = math.sqrt(float(((src - dst) ** 2).sum(axis=1).mean()))
+            if rms <= 0.5 * apart:
+                drift = matrix
+        except ValueError:
+            pass
+
+    pairs = []
+    for m, (x, y, radius) in enumerate(markers):
+        near = max(radius, tolerance)
+        shifted_x, shifted_y = geo.apply(drift, x, y)
+        for c, candidate in enumerate(candidates):
+            distance = min(math.hypot(candidate["x"] - x, candidate["y"] - y),
+                           math.hypot(candidate["x"] - shifted_x, candidate["y"] - shifted_y))
+            if distance <= near:
+                pairs.append((candidate["tier"] == "faint", distance, m, c))
+    pairs.sort()
+    matched, used = {}, set()
+    for _faint, _distance, m, c in pairs:
+        if m not in matched and c not in used:
+            matched[m] = candidates[c]
+            used.add(c)
+    positions = [(float(matched[m]["x"]), float(matched[m]["y"])) if m in matched
+                 else (float(markers[m][0]), float(markers[m][1])) for m in range(len(markers))]
+    return positions, set(matched)
+
 def flag_present_in(candidates, others, tolerance=10.0):
     """Mark each candidate with whether a spot in ``others`` (a list of ``(x, y)``
     in the same pixel space) lies at the same place."""
@@ -124,6 +226,21 @@ def flag_present_in(candidates, others, tolerance=10.0):
         distances = np.hypot(points[:, 0] - candidate["x"], points[:, 1] - candidate["y"])
         candidate["in_reference"] = bool(distances.min() <= tolerance)
     return candidates
+
+
+def inside_polygon(xs, ys, polygon):
+    """``point_in_polygon`` for many points at once; returns a boolean array."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    inside = np.zeros(xs.shape, dtype=bool)
+    n = len(polygon)
+    for i in range(n):
+        x0, y0 = polygon[i]
+        x1, y1 = polygon[(i + 1) % n]
+        if y0 == y1:
+            continue
+        inside ^= ((y0 > ys) != (y1 > ys)) & (xs < (x1 - x0) * (ys - y0) / (y1 - y0) + x0)
+    return inside
 
 
 def point_in_polygon(x, y, polygon):

@@ -81,9 +81,9 @@ GUIDE = [
         "feature in the bottom row; repeat for two or more features and press Apply.",
         "- The crosshair now marks the same place on the filter in all four panels.",
         "- If the two inspections were photographed with different exposures, open 'Brightness, "
-        "contrast and noise', choose a reference image and press Match: the brightness and "
-        "contrast of both reference images are set so each looks like its counterpart in the "
-        "current row.",
+        "contrast and noise' and use 'Match brightness between rows'.  Choose which row to adjust "
+        "(reference to look like current, or the other way round) and whether to match the backlit "
+        "images, the frontlit images or both, then press Match.",
         "- Edit > Copy markers from reference row brings the earlier markers into the current "
         "inspection, so you only need to add what is new.",
     ]),

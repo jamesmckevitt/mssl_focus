@@ -521,7 +521,6 @@ def test_matching_makes_the_reference_frontlit_look_like_the_current_one(app, tm
     assert shown_median(1) < shown_median(0) - 15
     app.adjust_target_var.set("Reference frontlit image")
     app._sync_controls()
-    assert app.match_button.cget("text") == "Match row to current row"
     app.match_to_other_row()
     wait_idle(app)
     assert shown_median(1) == pytest.approx(shown_median(0), abs=3)
@@ -586,3 +585,53 @@ def test_an_unsure_candidate_gets_a_question_mark(app, tmp_path):
     app._toggle_annotation_unsure(0)
     assert "unsure" not in app.pairs[0].annotations[0]
     assert app.pairs[0].legend() == [("#ff0000", "Pinholes  (n=2)")]
+
+
+def test_matching_direction_and_scope_can_be_chosen(app, tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    def stage(folder, gain):
+        folder.mkdir(parents=True)
+        rng = np.random.default_rng(5)
+        base = np.clip(rng.normal(90, 25, (800, 1200)), 10, 170)
+        Image.fromarray(np.clip(base * gain, 0, 255).astype(np.uint8)).convert("RGB").save(folder / "front.png")
+        spots = [(int(x), int(y)) for x, y in np.random.default_rng(8).uniform((60, 60), (1140, 740), (300, 2))]
+        make_filter_image(SIZE, spots, mesh=False, dot_value=int(200 * gain), background=0).save(folder / "back.png")
+        return folder
+
+    earlier = stage(tmp_path / "1_incoming" / "em9", 0.6)
+    load_stage(app, earlier)
+    app._write_session(str(earlier / "session.json"))
+    app.new_session()
+    load_stage(app, stage(tmp_path / "2_shock" / "em9", 1.0))
+    app.open_reference_session(str(earlier / "session.json"))
+    wait_idle(app)
+    current, reference = app.pairs
+
+    def brightness():
+        return [round(p.adjust[i]["brightness"], 2) for p in (current, reference) for i in (BACKLIT, FRONTLIT)]
+
+    assert brightness() == [1.0, 1.0, 1.0, 1.0]
+
+    # Current row towards the reference row, frontlit only.
+    app.match_direction_var.set("Current row, to look like reference row")
+    app.match_scope_var.set("Frontlit only")
+    app.match_to_other_row()
+    wait_idle(app)
+    after = brightness()
+    assert after[1] == pytest.approx(0.6, abs=0.05)
+    assert [after[0], after[2], after[3]] == [1.0, 1.0, 1.0], "only the current frontlit image changes"
+    assert app.adjust_target_var.get() == "Frontlit image", "the sliders show the image that was adjusted"
+    app.undo()
+    assert brightness() == [1.0, 1.0, 1.0, 1.0]
+
+    # Reference row towards the current row, backlit only.
+    app.match_direction_var.set("Reference row, to look like current row")
+    app.match_scope_var.set("Backlit only")
+    app.match_to_other_row()
+    wait_idle(app)
+    after = brightness()
+    assert after[2] == pytest.approx(1 / 0.6, abs=0.1)
+    assert [after[0], after[1], after[3]] == [1.0, 1.0, 1.0], "only the reference backlit image changes"
+    assert app.adjust_target_var.get() == "Reference backlit image"

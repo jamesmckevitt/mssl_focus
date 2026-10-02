@@ -22,6 +22,17 @@ ADJUST_TARGETS = [
     ("Reference frontlit image", REFERENCE, FRONTLIT),
 ]
 
+# Which row "Match" adjusts, and which of its images.
+MATCH_DIRECTIONS = [
+    ("Reference row, to look like current row", REFERENCE),
+    ("Current row, to look like reference row", CURRENT),
+]
+MATCH_SCOPES = [
+    ("Backlit and frontlit", (BACKLIT, FRONTLIT)),
+    ("Backlit only", (BACKLIT,)),
+    ("Frontlit only", (FRONTLIT,)),
+]
+
 ADJUST_SLIDERS = [
     ("brightness", "Brightness", 0.1, 3.0, "{:.2f}"),
     ("contrast", "Contrast", 0.1, 3.0, "{:.2f}"),
@@ -83,6 +94,8 @@ class UIBuilderMixin:
         self.slider_inputs = {}   # label -> (text variable, commit function) of each slider's value box
         self.nr_vars = {"amount": tk.IntVar(), "color": tk.IntVar(), "edge": tk.IntVar()}
         self.nr_aggressive_var = tk.BooleanVar()
+        self.match_direction_var = tk.StringVar(value=MATCH_DIRECTIONS[0][0])
+        self.match_scope_var = tk.StringVar(value=MATCH_SCOPES[0][0])
         self.raw_exposure_var = tk.StringVar(value="0.0")
         self.raw_noise_var = tk.StringVar(value="Standard")
         self.detect_sensitivity_var = tk.StringVar(value="Normal")
@@ -663,13 +676,6 @@ class UIBuilderMixin:
                          lambda _v, k=key: self._on_adjust_changed(k), fmt=fmt)
         line = self._row(body, 4)
         ttk.Button(line, text="Reset", takefocus=False, command=self.reset_adjustments).pack(side=tk.LEFT)
-        self.match_button = ttk.Button(line, text="Match to other row", takefocus=False,
-                                       command=self.match_to_other_row)
-        self.match_button.pack(side=tk.LEFT, padx=self.px(6))
-        Tooltip(self.match_button,
-                "Set the brightness and contrast of both images in this row so each looks like its "
-                "counterpart in the other row, for example when the two inspections were photographed "
-                "with different exposures.")
         line = self._row(body, 2)
         ttk.Button(line, text="Save settings...", takefocus=False,
                    command=self.save_image_settings).pack(side=tk.LEFT)
@@ -677,6 +683,20 @@ class UIBuilderMixin:
                    command=self.load_image_settings).pack(side=tk.LEFT, padx=self.px(6))
         self._note(body, "Save this image's settings to a file and load them onto other images, "
                          "so every backlit (or frontlit) image is shown the same way.")
+
+        self._subheading(body, "Match brightness between rows")
+        self.match_frame = ttk.Frame(body)
+        self.match_frame.pack(fill=tk.X)
+        for label, var, choices in (("Adjust", self.match_direction_var, MATCH_DIRECTIONS),
+                                    ("Images", self.match_scope_var, MATCH_SCOPES)):
+            line = self._row(self.match_frame)
+            ttk.Label(line, text=label, width=7).pack(side=tk.LEFT)
+            ttk.Combobox(line, textvariable=var, state="readonly", takefocus=False,
+                         values=[name for name, _value in choices]).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        line = self._row(self.match_frame, 4)
+        self.match_button = ttk.Button(line, text="Match", takefocus=False, command=self.match_to_other_row)
+        self.match_button.pack(side=tk.LEFT)
+        self.match_note = self._note(body, "")
 
         self._subheading(body, "Camera RAW development")
         self.raw_frame = ttk.Frame(body)
@@ -790,12 +810,11 @@ class UIBuilderMixin:
             target = self.pairs[row]
             for key, _label, _low, _high, _fmt in ADJUST_SLIDERS:
                 self.adjust_vars[key].set(target.adjust[idx][key])
-            other = self.pairs[REFERENCE if row == CURRENT else CURRENT]
-            can_match = reference_ready and any(
-                target.has_image(i) and other.has_image(i) for i in (BACKLIT, FRONTLIT))
-            self.match_button.configure(
-                text="Match row to " + ("reference row" if row == CURRENT else "current row"))
-            self.match_button.state(["!disabled"] if can_match else ["disabled"])
+            self._set_children_state(self.match_frame, reference_ready)
+            self.match_note.configure(
+                text="Sets brightness and contrast of the chosen row so its images look like their "
+                     "counterparts in the other row, for example when two inspections were photographed "
+                     "with different exposures." if reference_ready else "Load a reference row to use this.")
             for key, var in self.nr_vars.items():
                 var.set(target.nr[idx][key])
             self.nr_aggressive_var.set(target.nr[idx]["aggressive"])
@@ -890,14 +909,15 @@ class UIBuilderMixin:
         self._schedule_render()
 
     def match_to_other_row(self):
-        """Give both images of the selected row the brightness and contrast that make each
-        look like its counterpart in the other row."""
-        row, _idx = self._adjust_target()
+        """Give the chosen images of the chosen row the brightness and contrast that make
+        each look like its counterpart in the other row."""
+        row = dict(MATCH_DIRECTIONS).get(self.match_direction_var.get(), REFERENCE)
+        wanted = dict(MATCH_SCOPES).get(self.match_scope_var.get(), (BACKLIT, FRONTLIT))
         other_row = REFERENCE if row == CURRENT else CURRENT
         target, source = self.pairs[row], self.pairs[other_row]
-        matchable = [i for i in (BACKLIT, FRONTLIT) if target.has_image(i) and source.has_image(i)]
+        matchable = [i for i in wanted if target.has_image(i) and source.has_image(i)]
         if not self._reference_ready() or not matchable:
-            self.set_status("Both rows need images before they can be matched.")
+            self.set_status("Both rows need the chosen kind of image before they can be matched.")
             return
 
         def luminance(pyramid):
@@ -927,6 +947,10 @@ class UIBuilderMixin:
                 settings["contrast"] = contrast
             details.append(f"{name} brightness {brightness:.2f}"
                            + (f", contrast {contrast:.2f}" if contrast is not None else ""))
+        # Show the sliders of an image that was just adjusted.
+        if self._adjust_target() not in [(row, i) for i in matchable]:
+            self.adjust_target_var.set(next(
+                name for name, target_row, idx in ADJUST_TARGETS if (target_row, idx) == (row, matchable[0])))
         self._sync_controls()
         self._schedule_render()
         self.set_status(f"Matched the {self._row_name(row)} to the {self._row_name(other_row)}: "

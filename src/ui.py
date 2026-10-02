@@ -134,6 +134,7 @@ class UIBuilderMixin:
                               command=lambda: self.load_image(BACKLIT, REFERENCE))
         file_menu.add_command(label="Load reference frontlit image...",
                               command=lambda: self.load_image(FRONTLIT, REFERENCE))
+        file_menu.add_command(label="Swap current and reference rows", command=self.swap_rows)
         file_menu.add_command(label="Remove reference row", command=self.remove_reference_row)
         file_menu.add_separator()
         file_menu.add_command(label="Save image settings...", command=self.save_image_settings)
@@ -532,6 +533,11 @@ class UIBuilderMixin:
                    command=self.open_reference_session).pack(side=tk.LEFT)
         ttk.Button(line, text="Remove", takefocus=False,
                    command=self.remove_reference_row).pack(side=tk.LEFT, padx=self.px(6))
+        self.swap_button = ttk.Button(line, text="Swap rows", takefocus=False, command=self.swap_rows)
+        self.swap_button.pack(side=tk.LEFT)
+        Tooltip(self.swap_button, "Make the reference row the current row and the current row the reference,\n"
+                                  "if they were loaded the wrong way round.  Each keeps its own markers,\n"
+                                  "settings and alignment.")
         self._note(body, "The reference row shows an earlier inspection of the same filter, "
                          "with its markers, so you can see what a test changed.")
 
@@ -792,6 +798,8 @@ class UIBuilderMixin:
                 text="Aligns the reference row to the current row, so the cursor marks the same spot "
                      "on the filter in both." if reference_ready else "Load a reference row to use this.")
             self.copy_reference_button.state(["!disabled"] if reference_ready else ["disabled"])
+            self.swap_button.state(
+                ["!disabled"] if self.pairs[REFERENCE].has_any_image() else ["disabled"])
 
             current = self.pairs[CURRENT]
             self.legend_name_var.set(current.colour_labels.get(self.annot_colour, ""))

@@ -736,3 +736,59 @@ def test_loading_settings_reports_the_camera_they_were_saved_with(app, tmp_path,
     app.load_image_settings(str(preset))
     wait_idle(app)
     assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.5
+
+
+def test_rows_can_be_swapped_when_loaded_the_wrong_way_round(app, tmp_path):
+    back1, front1 = (1.0, (0, 0)), (0.3, (10, -6), 1.0)
+    stage1 = make_stage(tmp_path / "1_incoming" / "em9", DOTS, back1, front1)
+    load_stage(app, stage1)
+    align_frontlit(app, 0, back1, front1)
+    app.set_tool("annotate")
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *placed(DOTS[0], *back1)))
+    app._write_session(str(stage1 / "session.json"))
+
+    back2 = (-1.5, (30, 18))
+    stage2 = make_stage(tmp_path / "2_shock" / "em9", DOTS, back2, (-1.5, (30, 18), 1.0))
+    app.new_session()
+    load_stage(app, stage2)
+    app.pairs[0].adjust[BACKLIT]["brightness"] = 1.3
+    app.open_reference_session(str(stage1 / "session.json"))
+    wait_idle(app)
+    app.set_tool("align_rows")
+    for dot in (DOTS[0], DOTS[4], DOTS[3]):
+        click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *placed(dot, *back2)))
+        click(app, pane(app, 1, BACKLIT), *app.image_to_canvas(1, BACKLIT, *placed(dot, *back1)))
+    app.apply_tool_points()
+    wait_idle(app)
+    shift_before = dict(app.row_shift)
+    app.dirty = False
+
+    app.swap_rows()
+    wait_idle(app)
+    current, reference = app.pairs
+    assert current.label == "1_incoming / em9" and reference.label == "2_shock / em9"
+    assert current.paths[BACKLIT] == str(stage1 / "back.png")
+    assert len(current.annotations) == 1 and reference.annotations == []
+    assert reference.adjust[BACKLIT]["brightness"] == 1.3, "each row keeps its own settings"
+    assert app.session_path == str(stage1 / "session.json")
+    assert app.dirty and not app._undo_stack
+    assert app.show_reference_var.get()
+    # The rows are still registered to each other: every feature coincides on screen.
+    for dot in DOTS:
+        on_current = app.image_to_canvas(0, BACKLIT, *placed(dot, *back1))
+        assert app.image_to_canvas(1, BACKLIT, *placed(dot, *back2)) == pytest.approx(on_current, abs=0.75)
+        assert app.image_to_canvas(0, FRONTLIT, *placed(dot, *front1)) == pytest.approx(on_current, abs=1.0)
+
+    app.dirty = False
+    app.swap_rows()
+    wait_idle(app)
+    assert app.pairs[0].label == "2_shock / em9"
+    assert app.row_shift == pytest.approx(shift_before, abs=1e-6)
+    assert app.session_path is None, "the second inspection was never saved, so Save will ask for a name"
+
+
+def test_swap_needs_a_reference_row(app, tmp_path):
+    load_stage(app, make_stage(tmp_path / "s", DOTS))
+    path_before = app.pairs[0].paths[BACKLIT]
+    app.swap_rows()
+    assert app.pairs[0].paths[BACKLIT] == path_before

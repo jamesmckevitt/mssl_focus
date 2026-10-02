@@ -474,6 +474,42 @@ class ViewerMixin:
         self._load_images([((row, idx), path, pair.nr[idx], pair.develop[idx])], finished,
                           title="Developing RAW")
 
+    def swap_rows(self):
+        """Exchange the current and reference rows, for when they were loaded the wrong way round.
+
+        Each row keeps its own images, alignment, tone settings and markers, and the
+        alignment between the rows is kept (it is simply reversed).
+        """
+        if not self.pairs[REFERENCE].has_any_image():
+            messagebox.showinfo("Swap rows", "There is no reference row to swap with.  Load one first.",
+                                parent=self.root)
+            return
+        if not self._confirm_discard("swap the rows"):
+            return
+        reference_to_current = self.row_matrix()
+        self.pairs.reverse()
+        self.set_row_matrix(geo.invert(reference_to_current))
+        self.show_reference_var.set(True)
+
+        # The session is now about the other inspection, so it saves to that one's file
+        # (or asks for a name if it never had one).  Undo history refers to the old order.
+        self.session_path = self.pairs[CURRENT].session_path
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._last_checkpoint = (None, 0.0)
+        self.dirty = True
+        self._clear_tool_points(redraw=False)
+        if self.tool_var.get() == "review":
+            self._finish_review()
+        self._update_title()
+        self._layout_panes()
+        self._sync_controls()
+        self.fit_view()
+        target = (f"Saving now writes to {os.path.basename(self.session_path)}." if self.session_path
+                  else "Saving will ask for a file name.")
+        self.set_status(f"Rows swapped: {self.pairs[CURRENT].label or 'the former reference'} is now the "
+                        f"current row.  {target}")
+
     def remove_reference_row(self):
         if not self.pairs[REFERENCE].has_any_image():
             self.show_reference_var.set(False)

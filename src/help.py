@@ -85,6 +85,8 @@ GUIDE = [
         "- Choose Align rows (R).  Click a feature of the filter in the top row, then the same "
         "feature in the bottom row; repeat for two or more features and press Apply.",
         "- The crosshair now marks the same place on the filter in all four panels.",
+        "- Loaded them the wrong way round?  'Swap rows' in the Images panel exchanges the two, each "
+        "keeping its own markers, settings and alignment.",
         "- If the two inspections were photographed with different exposures, open 'Brightness, "
         "contrast and noise' and use 'Match brightness between rows'.  Choose which row to adjust "
         "(reference to look like current, or the other way round) and whether to match the backlit "

@@ -13,6 +13,8 @@ from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
 
 SESSION_FILETYPES = [("Session file", "*.json"), ("All files", "*.*")]
 SESSION_VERSION = 2
+SETTINGS_FILE_TYPE = "mssl_focus_image_settings"
+SETTINGS_FILETYPES = [("Image settings or session", "*.json"), ("All files", "*.*")]
 
 
 # --------------------------------------------------------------------------- #
@@ -470,20 +472,87 @@ class SessionMixin:
 
         self._load_images(jobs, finished, title="Loading reference session")
 
-    def import_image_settings(self):
-        title = "Import image settings"
-        path = self._ask_session_file(title)
+    # ------------------------------------------------------------------ #
+    # Image settings presets
+    # ------------------------------------------------------------------ #
+
+    def save_image_settings(self):
+        """Save the selected image's tone, noise and RAW settings to a file of their own."""
+        row, idx = self._adjust_target()
+        pair = self.pairs[row]
+        kind = "backlit" if idx == BACKLIT else "frontlit"
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title=f"Save {kind} image settings", defaultextension=".json",
+            initialdir=self._dialog_dir(), initialfile=f"{kind}_settings.json", filetypes=SETTINGS_FILETYPES)
+        if not path:
+            return None
+        record = {
+            "type": SETTINGS_FILE_TYPE,
+            "version": 1,
+            "image": kind,
+            "adjust": dict(pair.adjust[idx]),
+            "noise_reduction": dict(pair.nr[idx]),
+            "raw_develop": dict(pair.develop[idx]),
+        }
+        try:
+            write_session(path, record)
+        except OSError as exc:
+            messagebox.showerror("Save image settings", f"Could not save the settings:\n{path}\n\n{exc}",
+                                 parent=self.root)
+            return None
+        self._remember_dir(path)
+        self.set_status(f"Saved {kind} image settings: {path}")
+        return path
+
+    def load_image_settings(self, path=None):
+        """Apply saved settings -- from a settings file or a session -- to the selected image."""
+        title = "Load image settings"
+        row, idx = self._adjust_target()
+        pair = self.pairs[row]
+        kind = "backlit" if idx == BACKLIT else "frontlit"
+        if not path:
+            path = filedialog.askopenfilename(
+                parent=self.root, title=f"Load settings for the {self._image_label(idx, row).lower()}",
+                initialdir=self._dialog_dir(), filetypes=SETTINGS_FILETYPES)
         if not path:
             return
-        session = self._read_session_or_report(path, title)
-        if session is None:
+        data = self._read_session_or_report(path, title)
+        if data is None:
             return
-        if "adjustments" not in session:
-            messagebox.showinfo(title, "That session does not contain image adjustment settings.",
-                                parent=self.root)
+        self._remember_dir(path)
+        if data.get("type") == SETTINGS_FILE_TYPE:
+            adjust, noise, develop = data.get("adjust"), data.get("noise_reduction"), data.get("raw_develop")
+            saved_for = data.get("image")
+        elif "adjustments" in data:
+            # A session file: take the settings of its image of the same kind.
+            def pick(key):
+                values = data.get(key)
+                return values[idx] if isinstance(values, list) and idx < len(values) else None
+            adjust, noise, develop = pick("adjustments"), pick("noise_reduction"), pick("raw_develop")
+            saved_for = kind
+        else:
+            messagebox.showinfo(title, "That file does not contain image settings.", parent=self.root)
             return
-        self._checkpoint("Import image settings")
-        self.pairs[0].apply_adjust_records(session.get("adjustments"))
+
+        def replaced(current, new):
+            records = [dict(r) for r in current]
+            if isinstance(new, dict):
+                records[idx] = new
+            return records
+
+        old_noise, old_develop = dict(pair.nr[idx]), dict(pair.develop[idx])
+        self._checkpoint("Load image settings")
+        pair.apply_adjust_records(replaced(pair.adjust, adjust))
+        pair.apply_nr_records(replaced(pair.nr, noise))
+        pair.apply_develop_records(replaced(pair.develop, develop))
         self._sync_controls()
         self._schedule_render()
-        self.set_status(f"Imported brightness, contrast and levels from {os.path.basename(path)}.")
+        note = "" if saved_for in (None, kind) else f"  Note: they were saved from a {saved_for} image."
+        self.set_status(f"Loaded settings from {os.path.basename(path)} onto the "
+                        f"{self._image_label(idx, row).lower()}.{note}")
+        if not pair.has_image(idx):
+            return
+        if is_raw(pair.paths[idx]) and pair.develop[idx] != old_develop:
+            self.redevelop_image(idx, row)          # also applies the extra noise reduction
+        elif pair.nr[idx] != old_noise:
+            self.apply_noise_reduction(idx, row)

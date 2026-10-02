@@ -189,8 +189,8 @@ class ToolsMixin:
             extra = (f"  {summary.get('new', 0)} not in the reference image."
                      if summary.get("with_reference") else "")
             text = (f"Candidate {min(self._candidate_index + 1, len(pending))} of {len(pending)} "
-                    f"(yellow circle), strongest first.{where}  Accept = Enter, skip = S, "
-                    f"not a pinhole = X.  {summary.get('marked', 0)} spots already had markers.{extra}")
+                    f"(yellow circle), strongest first.{where}  Accept = Enter, unsure = U "
+                    f"(marked with a ?), skip = S, not a pinhole = X.  {summary.get('marked', 0)} spots already had markers.{extra}")
         else:
             title = "Crop export"
             text = ("Drag a rectangle around the region to export.  A preview opens where you can "
@@ -364,6 +364,7 @@ class ToolsMixin:
             return self._on_escape()
         if self.tool_var.get() == "review":
             action = {"Return": self.review_accept, "KP_Enter": self.review_accept,
+                      "u": self.review_unsure, "U": self.review_unsure, "question": self.review_unsure,
                       "s": self.review_skip, "S": self.review_skip, "Right": self.review_skip,
                       "Left": lambda: self.review_skip(-1),
                       "x": self.review_reject, "X": self.review_reject, "Delete": self.review_reject}.get(key)

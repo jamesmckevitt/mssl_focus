@@ -6,7 +6,9 @@ from tkinter import ttk
 
 from . import theme
 from .annotations import PRESET_COLOURS
-from .imaging import RAW_NOISE_LEVELS, is_raw
+import numpy as np
+
+from .imaging import RAW_NOISE_LEVELS, build_lut, is_raw, match_tone
 from .help import show_about, show_guide, show_shortcuts
 from .pair import BACKLIT, FRONTLIT
 from .theme import Tooltip
@@ -78,7 +80,7 @@ class UIBuilderMixin:
 
         self.adjust_target_var = tk.StringVar(value=ADJUST_TARGETS[0][0])
         self.adjust_vars = {key: tk.DoubleVar() for key, *_rest in ADJUST_SLIDERS}
-        self.adjust_readouts = {key: tk.StringVar() for key, *_rest in ADJUST_SLIDERS}
+        self.slider_inputs = {}   # label -> (text variable, commit function) of each slider's value box
         self.nr_vars = {"amount": tk.IntVar(), "color": tk.IntVar(), "edge": tk.IntVar()}
         self.nr_aggressive_var = tk.BooleanVar()
         self.raw_exposure_var = tk.StringVar(value="0.0")
@@ -121,7 +123,8 @@ class UIBuilderMixin:
                               command=lambda: self.load_image(FRONTLIT, REFERENCE))
         file_menu.add_command(label="Remove reference row", command=self.remove_reference_row)
         file_menu.add_separator()
-        file_menu.add_command(label="Import image settings from session...", command=self.import_image_settings)
+        file_menu.add_command(label="Save image settings...", command=self.save_image_settings)
+        file_menu.add_command(label="Load image settings...", command=self.load_image_settings)
         file_menu.add_separator()
         file_menu.add_command(label="Export crop...", accelerator="C", command=lambda: self.set_tool("crop"))
         file_menu.add_command(label="Export current view...", command=self.export_view)
@@ -279,6 +282,10 @@ class UIBuilderMixin:
                                              takefocus=False, command=self._on_new_only_toggle)
         self.hint_accept = ttk.Button(self.hint_actions, text="Accept", style="Accent.TButton",
                                       command=self.review_accept, takefocus=False)
+        self.hint_unsure = ttk.Button(self.hint_actions, text="Unsure (?)", command=self.review_unsure,
+                                      takefocus=False)
+        Tooltip(self.hint_unsure, "Add the marker with a question mark after its label, to look at again "
+                                  "later (U).\nRight-click a marker to confirm it or mark it unsure.")
         self.hint_skip = ttk.Button(self.hint_actions, text="Skip", command=self.review_skip, takefocus=False)
         self.hint_reject = ttk.Button(self.hint_actions, text="Not a pinhole", command=self.review_reject,
                                       takefocus=False)
@@ -306,7 +313,8 @@ class UIBuilderMixin:
         elif kind == "review":
             if self._candidate_summary.get("with_reference"):
                 self.hint_new_only.pack(side=tk.LEFT, padx=(pad, self.px(10)))
-            for widget in (self.hint_accept, self.hint_skip, self.hint_reject, self.hint_accept_all):
+            for widget in (self.hint_accept, self.hint_unsure, self.hint_skip, self.hint_reject,
+                           self.hint_accept_all):
                 widget.pack(side=tk.LEFT, padx=pad)
         if kind == "points":
             self.hint_scale_check.pack(side=tk.LEFT, padx=(pad, self.px(10)))
@@ -450,13 +458,40 @@ class UIBuilderMixin:
         box.bind("<FocusOut>", lambda _e: command())
         return box
 
-    def _slider(self, parent, label, var, low, high, command, readout=None, label_width=11):
+    def _slider(self, parent, label, var, low, high, command, fmt="{:.2f}", label_width=11):
+        """A slider with a box beside it showing the value, where an exact value can be typed."""
         row = self._row(parent, 3)
         ttk.Label(row, text=label, width=label_width).pack(side=tk.LEFT)
-        if readout is not None:
-            ttk.Label(row, textvariable=readout, style="Value.TLabel", width=5, anchor=tk.E).pack(side=tk.RIGHT)
+        text = tk.StringVar()
+        entry = ttk.Entry(row, textvariable=text, width=6, justify=tk.RIGHT)
+        entry.pack(side=tk.RIGHT)
         scale = ttk.Scale(row, from_=low, to=high, variable=var, command=command)
         scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=self.px(6))
+
+        def show(*_):
+            try:
+                text.set(fmt.format(float(var.get())))
+            except (tk.TclError, ValueError):
+                pass
+
+        def commit(_event=None):
+            try:
+                value = min(high, max(low, float(text.get().replace(",", "."))))
+            except ValueError:
+                show()
+                return
+            if abs(value - float(var.get())) > 1e-9:
+                var.set(value)
+                command(str(value))
+            show()
+
+        var.trace_add("write", show)
+        show()
+        entry.bind("<Return>", lambda _e: (commit(), self.panes[0].canvas.focus_set()))
+        entry.bind("<KP_Enter>", lambda _e: (commit(), self.panes[0].canvas.focus_set()))
+        entry.bind("<FocusOut>", commit)
+        entry.bind("<Escape>", lambda _e: (show(), self.panes[0].canvas.focus_set()))
+        self.slider_inputs[label] = (text, commit)
         return scale
 
     # -- Images --------------------------------------------------------- #
@@ -596,11 +631,11 @@ class UIBuilderMixin:
                     width=7).pack(side=tk.LEFT, padx=self.px(8))
         redraw = lambda _v=None: self._draw_overlays()
         self._slider(body, "Line width", self.annot_width_var, 0.5, 6.0,
-                     lambda v: (self.annot_width_var.set(round(float(v) * 2) / 2), redraw()))
+                     lambda v: (self.annot_width_var.set(round(float(v) * 2) / 2), redraw()), fmt="{:.1f}")
         self._slider(body, "Label size", self.annot_label_size_var, 6, 48,
-                     lambda v: (self.annot_label_size_var.set(int(round(float(v)))), redraw()))
+                     lambda v: (self.annot_label_size_var.set(int(round(float(v)))), redraw()), fmt="{:.0f}")
         self._slider(body, "Legend size", self.canvas_legend_size_var, 6, 36,
-                     lambda v: (self.canvas_legend_size_var.set(int(round(float(v)))), redraw()))
+                     lambda v: (self.canvas_legend_size_var.set(int(round(float(v)))), redraw()), fmt="{:.0f}")
 
         line = self._row(body, 6)
         ttk.Button(line, text="Place markers", style="Accent.TButton", takefocus=False,
@@ -623,11 +658,25 @@ class UIBuilderMixin:
         self.adjust_target_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(self.px(8), 0))
         self.adjust_target_box.bind("<<ComboboxSelected>>", lambda _e: self._sync_controls())
 
-        for key, label, low, high, _fmt in ADJUST_SLIDERS:
+        for key, label, low, high, fmt in ADJUST_SLIDERS:
             self._slider(body, label, self.adjust_vars[key], low, high,
-                         lambda _v, k=key: self._on_adjust_changed(k), readout=self.adjust_readouts[key])
+                         lambda _v, k=key: self._on_adjust_changed(k), fmt=fmt)
         line = self._row(body, 4)
         ttk.Button(line, text="Reset", takefocus=False, command=self.reset_adjustments).pack(side=tk.LEFT)
+        self.match_button = ttk.Button(line, text="Match to other row", takefocus=False,
+                                       command=self.match_to_other_row)
+        self.match_button.pack(side=tk.LEFT, padx=self.px(6))
+        Tooltip(self.match_button,
+                "Set the brightness and contrast of both images in this row so each looks like its "
+                "counterpart in the other row, for example when the two inspections were photographed "
+                "with different exposures.")
+        line = self._row(body, 2)
+        ttk.Button(line, text="Save settings...", takefocus=False,
+                   command=self.save_image_settings).pack(side=tk.LEFT)
+        ttk.Button(line, text="Load settings...", takefocus=False,
+                   command=self.load_image_settings).pack(side=tk.LEFT, padx=self.px(6))
+        self._note(body, "Save this image's settings to a file and load them onto other images, "
+                         "so every backlit (or frontlit) image is shown the same way.")
 
         self._subheading(body, "Camera RAW development")
         self.raw_frame = ttk.Frame(body)
@@ -650,7 +699,7 @@ class UIBuilderMixin:
         self._subheading(body, "Extra noise reduction (any image)")
         for key, label in (("amount", "Amount"), ("color", "Colour"), ("edge", "Edges")):
             self._slider(body, label, self.nr_vars[key], 0, 100,
-                         lambda v, k=key: self._on_nr_changed(k, v))
+                         lambda v, k=key: self._on_nr_changed(k, v), fmt="{:.0f}")
         ttk.Checkbutton(body, text="Aggressive", variable=self.nr_aggressive_var, takefocus=False,
                         command=lambda: self._on_nr_changed(None, None)).pack(anchor=tk.W)
         line = self._row(body, 4)
@@ -731,12 +780,22 @@ class UIBuilderMixin:
             for colour, swatch in self.colour_swatches.items():
                 swatch.configure(highlightbackground="#ffffff" if colour == self.annot_colour else theme.PANEL)
 
+            # Only offer the reference images when there is a reference row.
+            names = [name for name, target_row, _i in ADJUST_TARGETS if reference_ready or target_row == CURRENT]
+            self.adjust_target_box.configure(values=names)
+            if self.adjust_target_var.get() not in names:
+                self.adjust_target_var.set(names[0])
+
             row, idx = self._adjust_target()
             target = self.pairs[row]
-            for key, _label, _low, _high, fmt in ADJUST_SLIDERS:
-                value = target.adjust[idx][key]
-                self.adjust_vars[key].set(value)
-                self.adjust_readouts[key].set(fmt.format(value))
+            for key, _label, _low, _high, _fmt in ADJUST_SLIDERS:
+                self.adjust_vars[key].set(target.adjust[idx][key])
+            other = self.pairs[REFERENCE if row == CURRENT else CURRENT]
+            can_match = reference_ready and any(
+                target.has_image(i) and other.has_image(i) for i in (BACKLIT, FRONTLIT))
+            self.match_button.configure(
+                text="Match row to " + ("reference row" if row == CURRENT else "current row"))
+            self.match_button.state(["!disabled"] if can_match else ["disabled"])
             for key, var in self.nr_vars.items():
                 var.set(target.nr[idx][key])
             self.nr_aggressive_var.set(target.nr[idx]["aggressive"])
@@ -818,8 +877,6 @@ class UIBuilderMixin:
             return
         row, idx = self._adjust_target()
         value = float(self.adjust_vars[key].get())
-        fmt = next(f for k, _l, _lo, _hi, f in ADJUST_SLIDERS if k == key)
-        self.adjust_readouts[key].set(fmt.format(value))
         self._checkpoint("Adjust image", coalesce=f"adjust-{row}-{idx}-{key}")
         self.pairs[row].adjust[idx][key] = value
         self._schedule_render(interactive=True)
@@ -831,6 +888,49 @@ class UIBuilderMixin:
             [None if i == idx else dict(a) for i, a in enumerate(self.pairs[row].adjust)])
         self._sync_controls()
         self._schedule_render()
+
+    def match_to_other_row(self):
+        """Give both images of the selected row the brightness and contrast that make each
+        look like its counterpart in the other row."""
+        row, _idx = self._adjust_target()
+        other_row = REFERENCE if row == CURRENT else CURRENT
+        target, source = self.pairs[row], self.pairs[other_row]
+        matchable = [i for i in (BACKLIT, FRONTLIT) if target.has_image(i) and source.has_image(i)]
+        if not self._reference_ready() or not matchable:
+            self.set_status("Both rows need images before they can be matched.")
+            return
+
+        def luminance(pyramid):
+            small = pyramid.levels[-1]
+            return np.asarray(small if small.mode == "L" else small.convert("L"), dtype=np.float32)
+
+        def through(values, lut):
+            if lut is None:
+                return values
+            return np.asarray(lut, dtype=np.float32)[np.clip(values, 0, 255).astype(np.uint8)]
+
+        self._checkpoint("Match brightness and contrast")
+        details = []
+        for idx in matchable:
+            settings = target.adjust[idx]
+            levels = build_lut(1.0, 1.0, settings["blacks"], settings["whites"], 0.0)
+            target_values = through(luminance(target.pyramids[idx]), levels)
+            pivot = float(through(np.array([target.pyramids[idx].mean], dtype=np.float32), levels)[0])
+            source_values = through(luminance(source.pyramids[idx]), source.lut(idx))
+            brightness, contrast = match_tone(target_values, source_values, pivot)
+            name = "backlit" if idx == BACKLIT else "frontlit"
+            if brightness is None:
+                details.append(f"{name} left alone (nothing bright enough to compare)")
+                continue
+            settings["brightness"] = brightness
+            if contrast is not None:
+                settings["contrast"] = contrast
+            details.append(f"{name} brightness {brightness:.2f}"
+                           + (f", contrast {contrast:.2f}" if contrast is not None else ""))
+        self._sync_controls()
+        self._schedule_render()
+        self.set_status(f"Matched the {self._row_name(row)} to the {self._row_name(other_row)}: "
+                        + "; ".join(details) + ".  Ctrl+Z undoes.")
 
     def _on_nr_changed(self, key, value):
         if self._syncing:

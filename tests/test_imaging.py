@@ -3,7 +3,7 @@ import pytest
 from PIL import Image
 
 from src import geometry as geo
-from src.imaging import CANVAS_BACKGROUND, Pyramid, build_lut, open_image
+from src.imaging import CANVAS_BACKGROUND, Pyramid, build_lut, match_tone, open_image
 from tests.helpers import dot_centroid, make_filter_image
 
 
@@ -74,3 +74,43 @@ def test_open_image_reports_unreadable_files(tmp_path):
     path.write_bytes(b"not an image")
     with pytest.raises(Exception):
         open_image(str(path))
+
+
+@pytest.mark.parametrize("brightness, contrast", [(1.25, 1.0), (0.8, 1.3), (1.6, 0.7)])
+def test_match_tone_recovers_the_settings_that_produced_the_other_image(brightness, contrast):
+    rng = np.random.default_rng(3)
+    target = np.clip(rng.normal(95, 22, 20000), 20, 150).astype(np.uint8).astype(np.float32)
+    mean = float(target.mean())
+    lut = np.asarray(build_lut(brightness, contrast, 0.0, 255.0, mean), dtype=np.float32)
+    source = lut[target.astype(np.uint8)]
+    found_brightness, found_contrast = match_tone(target, source, mean)
+    assert found_brightness == pytest.approx(brightness, abs=0.03)
+    assert found_contrast == pytest.approx(contrast, abs=0.04)
+
+
+def test_match_tone_on_dark_frames_matches_the_bright_end_only():
+    target = np.zeros(50000, dtype=np.float32)
+    target[:200] = 80.0
+    source = np.zeros(50000, dtype=np.float32)
+    source[:200] = 160.0
+    brightness, contrast = match_tone(target, source, pivot=0.3)
+    assert brightness == pytest.approx(2.0, abs=0.01)
+    assert contrast is None
+
+
+def test_match_tone_declines_when_an_image_has_nothing_bright():
+    assert match_tone(np.zeros(1000), np.full(1000, 2.0), pivot=0.0) == (None, None)
+
+
+def test_match_tone_keeps_blown_highlights_white():
+    """Two photographs with large clipped-white areas: the shadows are matched and
+    white stays white, instead of being dragged down to grey."""
+    rng = np.random.default_rng(4)
+    target = np.concatenate([np.clip(rng.normal(90, 15, 6000), 40, 160), np.full(4000, 255.0)])
+    source = np.concatenate([np.clip(rng.normal(120, 12, 6000), 80, 180), np.full(4000, 255.0)])
+    pivot = float(target.mean())
+    brightness, contrast = match_tone(target, source, pivot)
+    lut = np.asarray(build_lut(brightness, contrast, 0.0, 255.0, pivot), dtype=np.float32)
+    shown = lut[target.astype(np.uint8)]
+    assert shown[-1] >= 250
+    assert np.median(shown[:6000]) == pytest.approx(np.median(source[:6000]), abs=5)

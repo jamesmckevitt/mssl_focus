@@ -16,6 +16,12 @@ NR_DEFAULTS = {"amount": 0, "aggressive": False, "color": 50, "edge": 100}
 _LABEL_PATTERN = re.compile(r"^(.*?)(\d+)$")
 
 
+def marker_text(ann):
+    """The label drawn beside a marker; a trailing '?' flags one the inspector was unsure about."""
+    label = ann.get("label", "")
+    return label + "?" if ann.get("unsure") else label
+
+
 def normalise_annotation(ann):
     """Return a clean annotation record in backlit-image pixel coordinates."""
     record = dict(ann)
@@ -26,6 +32,10 @@ def normalise_annotation(ann):
     record["radius"] = float(ann.get("radius", 20.0))
     record["colour"] = ann.get("colour", "#ff0000")
     record["label"] = ann.get("label", "")
+    if record.get("unsure"):
+        record["unsure"] = True
+    else:
+        record.pop("unsure", None)
     return record
 
 
@@ -116,10 +126,18 @@ class ImagePair:
     # ------------------------------------------------------------------ #
 
     def legend(self):
-        counts = {}
+        """One ``(colour, text)`` entry per colour in use, with marker counts."""
+        counts, unsure = {}, {}
         for ann in self.annotations:
             counts[ann["colour"]] = counts.get(ann["colour"], 0) + 1
-        return [(colour, self.colour_labels.get(colour, ""), n) for colour, n in counts.items()]
+            if ann.get("unsure"):
+                unsure[ann["colour"]] = unsure.get(ann["colour"], 0) + 1
+        entries = []
+        for colour, n in counts.items():
+            tally = f"n={n}" + (f", {unsure[colour]} unsure" if colour in unsure else "")
+            name = self.colour_labels.get(colour, "")
+            entries.append((colour, f"{name}  ({tally})" if name else f"({tally})"))
+        return entries
 
     def prefix_for(self, colour):
         """Label prefix for a colour: the stored one, else inferred from existing labels."""

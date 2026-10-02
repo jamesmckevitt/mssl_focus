@@ -13,6 +13,8 @@ GUIDE = [
         "through, so pinholes show as bright points) and a frontlit image (surface detail).",
         "- Click the empty Backlit panel and choose the backlit file, then do the same for Frontlit.",
         "- TIFF, PNG, JPEG and camera RAW files (ARW, NEF, CR2, DNG, ...) all work.",
+        "- Under 'Brightness, contrast and noise' each slider has a box for typing an exact value, "
+        "and Save settings / Load settings keep one look for all backlit (or frontlit) images.",
         "- Camera RAW files can be loaded as they are, with no conversion step.  A backlit RAW "
         "frame is developed for dark-field viewing: the noise floor becomes black and pinholes are "
         "brightened.  Exposure and noise reduction are under 'Brightness, contrast and noise'.",
@@ -56,6 +58,8 @@ GUIDE = [
         "- Each small bright spot without a marker is shown in turn, strongest first, in a yellow "
         "circle.  Press Enter to accept it as a marker in the colour in use, S to skip it, or X if "
         "it is not a pinhole.  Esc stops the review.",
+        "- Not sure?  Press U: the marker is added with a question mark after its label and counted "
+        "as 'unsure' in the legend.  Right-click a marker later to confirm it.",
         "- With a reference row loaded and aligned, spots that are not in the earlier image come "
         "first and are labelled as new; tick 'Only new since reference' to see just those.",
         "- Sensitivity sets how faint a spot may be.  The search suggests; you decide.  Check each "
@@ -76,6 +80,10 @@ GUIDE = [
         "- Choose Align rows (R).  Click a feature of the filter in the top row, then the same "
         "feature in the bottom row; repeat for two or more features and press Apply.",
         "- The crosshair now marks the same place on the filter in all four panels.",
+        "- If the two inspections were photographed with different exposures, open 'Brightness, "
+        "contrast and noise', choose a reference image and press Match: the brightness and "
+        "contrast of both reference images are set so each looks like its counterpart in the "
+        "current row.",
         "- Edit > Copy markers from reference row brings the earlier markers into the current "
         "inspection, so you only need to add what is new.",
     ]),
@@ -109,7 +117,7 @@ SHORTCUTS = [
         ("C", "Crop export"),
         ("Esc", "Clear points, or return to Pan"),
         ("Enter", "Apply the alignment points"),
-        ("Enter  /  S  /  X", "Accept, skip or reject a found pinhole"),
+        ("Enter  /  U  /  S  /  X", "Accept, mark unsure, skip or reject a found pinhole"),
     ]),
     ("View", [
         ("F", "Fit to window"),

@@ -11,7 +11,7 @@ from . import geometry as geo
 from . import theme
 from .imaging import blank_frame
 from .metadata import APP_VERSION
-from .pair import BACKLIT, FRONTLIT
+from .pair import BACKLIT, FRONTLIT, marker_text
 from .viewer import CURRENT, REFERENCE
 
 MAX_EXPORT_PIXELS = 160e6
@@ -106,8 +106,9 @@ class ExportMixin:
                         continue
                     panel_draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
                                        outline=ann["colour"], width=stroke)
-                    if ann.get("label"):
-                        panel_draw.text((cx + radius + stroke + 3, cy), ann["label"], fill=ann["colour"],
+                    text = marker_text(ann)
+                    if text:
+                        panel_draw.text((cx + radius + stroke + 3, cy), text, fill=ann["colour"],
                                         font=label_font, anchor="lm")
                 result.paste(panel, (col * (width + GAP), top + title_h))
 
@@ -143,8 +144,8 @@ class ExportMixin:
         for title, data in legends:
             if title:
                 rows.append(("title", "#dddddd", title))
-            for colour, label, count in data:
-                rows.append(("entry", colour, f"{label}  (n={count})" if label else f"(n={count})"))
+            for colour, text in data:
+                rows.append(("entry", colour, text))
             rows.append(("gap", None, ""))
         rows.pop()
         text_w = max(measure.textbbox((0, 0), text, font=font)[2] for _k, _c, text in rows)

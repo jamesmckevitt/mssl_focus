@@ -143,6 +143,16 @@ class DetectMixin:
         self._candidates.remove(candidate)
         self._show_candidate()
 
+    def review_unsure(self):
+        """Accept the candidate, flagged with a question mark as one to look at again."""
+        candidate = self._current_candidate()
+        if candidate is None:
+            return
+        if not self._add_candidate_markers([candidate], unsure=True):
+            return
+        self._candidates.remove(candidate)
+        self._show_candidate()
+
     def review_skip(self, step=1):
         pending = self._review_candidates()
         if not pending:
@@ -176,7 +186,7 @@ class DetectMixin:
                 self._candidates.remove(candidate)
             self._finish_review()
 
-    def _add_candidate_markers(self, candidates):
+    def _add_candidate_markers(self, candidates, unsure=False):
         pair = self.pairs[CURRENT]
         colour = self.annot_colour
         if colour not in pair.colour_labels or pair.prefix_for(colour) is None:
@@ -188,13 +198,16 @@ class DetectMixin:
         self._checkpoint("Add detected markers" if len(candidates) > 1 else "Add detected marker")
         radius = self._marker_radius()
         for candidate in candidates:
-            pair.annotations.append({
+            marker = {
                 "img1_x": candidate["x"],
                 "img1_y": candidate["y"],
                 "radius": max(radius, candidate["radius"] * 2.0),
                 "colour": colour,
                 "label": pair.next_label(colour) if self.annot_autolabel_var.get() else "",
-            })
+            }
+            if unsure:
+                marker["unsure"] = True
+            pair.annotations.append(marker)
         return True
 
     def _finish_review(self):

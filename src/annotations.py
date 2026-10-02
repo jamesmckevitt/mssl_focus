@@ -9,7 +9,7 @@ from tkinter import colorchooser, messagebox, ttk
 from . import geometry as geo
 from . import theme
 from .constants import _PRESET_COLOURS
-from .pair import BACKLIT, FRONTLIT
+from .pair import BACKLIT, FRONTLIT, marker_text
 from .viewer import CURRENT, REFERENCE
 
 PICK_TOLERANCE = 14  # screen pixels beyond the marker's edge
@@ -122,6 +122,8 @@ class AnnotationMixin:
         menu.add_command(label=f"Delete marker {ann.get('label') or index + 1}",
                          command=lambda: self._delete_annotation(index))
         menu.add_command(label="Edit label...", command=lambda: self._edit_annotation_label(index))
+        menu.add_command(label="Mark as confirmed" if ann.get("unsure") else "Mark as unsure (?)",
+                         command=lambda: self._toggle_annotation_unsure(index))
         menu.add_command(label="Change to current colour", command=lambda: self._recolour_annotation(index))
         menu.add_command(label="Set radius to current size", command=lambda: self._resize_annotation(index))
         try:
@@ -146,6 +148,15 @@ class AnnotationMixin:
         self._checkpoint("Edit label")
         ann["label"] = value.strip()
         self._refresh_hint()
+        self._draw_overlays()
+
+    def _toggle_annotation_unsure(self, index):
+        ann = self.pairs[CURRENT].annotations[index]
+        self._checkpoint("Mark as confirmed" if ann.get("unsure") else "Mark as unsure")
+        if ann.get("unsure"):
+            ann.pop("unsure", None)
+        else:
+            ann["unsure"] = True
         self._draw_overlays()
 
     def _recolour_annotation(self, index):
@@ -208,10 +219,13 @@ class AnnotationMixin:
                 for other in current.annotations)
             if duplicate:
                 continue
-            current.annotations.append({
+            copied = {
                 "img1_x": float(x), "img1_y": float(y), "radius": float(radius),
                 "colour": ann["colour"], "label": ann.get("label", ""),
-            })
+            }
+            if ann.get("unsure"):
+                copied["unsure"] = True
+            current.annotations.append(copied)
             added += 1
         for colour, name in reference.colour_labels.items():
             current.colour_labels.setdefault(colour, name)
@@ -307,8 +321,9 @@ class AnnotationMixin:
             if dash:
                 options["dash"] = dash
             canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, **options)
-            if ann.get("label"):
-                canvas.create_text(cx + radius + self.px(4), cy, text=ann["label"], fill=ann["colour"],
+            text = marker_text(ann)
+            if text:
+                canvas.create_text(cx + radius + self.px(4), cy, text=text, fill=ann["colour"],
                                    anchor=tk.W, font=font, tags="world")
 
     def _draw_tool_points(self, pane):
@@ -346,13 +361,13 @@ class AnnotationMixin:
         pad = max(self.px(5), font.metrics("linespace") // 3)
         row_h = int(font.metrics("linespace") * 1.25)
         swatch = int(font.metrics("linespace") * 0.6)
-        texts = [f"{label}  (n={count})" if label else f"(n={count})" for _c, label, count in data]
+        texts = [text for _colour, text in data]
         box_w = max(font.measure(t) for t in texts) + pad * 3 + swatch
         box_h = pad * 2 + len(data) * row_h
         x0 = width - pad - box_w
         y0 = height - pad - box_h
         canvas.create_rectangle(x0, y0, x0 + box_w, y0 + box_h, fill="#1e1e1e", outline="#555555", tags="hud")
-        for i, ((colour, _label, _count), text) in enumerate(zip(data, texts)):
+        for i, (colour, text) in enumerate(data):
             cy = y0 + pad + i * row_h + row_h // 2
             canvas.create_rectangle(x0 + pad, cy - swatch // 2, x0 + pad + swatch, cy + swatch // 2,
                                     fill=colour, outline="", tags="hud")

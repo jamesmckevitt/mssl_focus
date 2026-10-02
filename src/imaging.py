@@ -255,13 +255,79 @@ def build_lut(brightness, contrast, blacks, whites, mean):
 
     def curve(values):
         out = (values - blacks) * (255.0 / max(whites - blacks, 1.0))
-        out = np.clip(out, 0, 255)
-        return np.clip(out * brightness, 0, 255)
+        # Not clipped again after brightening: lowering contrast must be able to
+        # bring over-bright values back, or blown highlights would turn grey.
+        return np.clip(out, 0, 255) * brightness
 
     x = curve(np.arange(256, dtype=np.float32))
     pivot = float(curve(np.array([mean], dtype=np.float32))[0])
     x = np.clip(pivot + (x - pivot) * contrast, 0, 255)
     return np.round(x).astype(np.uint8).tolist()
+
+
+def match_tone(target, source, pivot):
+    """Brightness and contrast that make one image look like another.
+
+    ``target`` is the luminance (0-255) of the image to adjust, after its own
+    blacks/whites levels but before brightness and contrast.  ``source`` is the
+    luminance of the image to imitate, as displayed.  ``pivot`` is the level
+    the target's contrast turns about (its mean after levels).
+
+    Returns ``(brightness, contrast)``; contrast is ``None`` when the images are
+    too dark for it to be estimated, in which case only brightness is matched,
+    and both are ``None`` if an image holds nothing bright to compare.
+    """
+    target = np.asarray(target, dtype=np.float32).ravel()
+    source = np.asarray(source, dtype=np.float32).ravel()
+
+    def clamp(value):
+        return float(min(3.0, max(0.1, value)))
+
+    # Compare the two brightness distributions point by point, leaving out
+    # values that are clipped to black or white in either image: those carry
+    # no information about how much brighter one image is than the other.
+    points = np.concatenate([np.linspace(2.0, 98.0, 49), [98.5, 99.0, 99.5, 99.8, 99.95]])
+    t_points = np.percentile(target, points)
+    s_points = np.percentile(source, points)
+    usable = (t_points > 4.0) & (s_points > 4.0) & (t_points < 250.0) & (s_points < 250.0)
+    t_mid, s_mid = float(np.median(target)), float(np.median(source))
+
+    mostly_black = min(t_mid, s_mid, pivot) < 12.0
+    if not mostly_black and usable.sum() >= 5 and np.ptp(t_points[usable]) >= 8.0:
+        # Displayed value = b*pivot + c*b*(value - pivot): a straight line in the value.
+        x, y = t_points[usable], s_points[usable]
+        # Where both images have blown-out (or fully black) areas, those must stay
+        # white (or black) rather than turn grey, so the line is pinned there.
+        pinned = [level for level, clipped in ((255.0, lambda v: v >= 250.0), (0.0, lambda v: v <= 2.0))
+                  if clipped(target).mean() >= 0.01 and clipped(source).mean() >= 0.01]
+        if len(pinned) == 2:
+            slope, intercept = 1.0, 0.0
+        elif pinned:
+            anchor = pinned[0]
+            slope = float(((x - anchor) * (y - anchor)).sum() / ((x - anchor) ** 2).sum())
+            intercept = anchor - slope * anchor
+        else:
+            slope, intercept = np.polyfit(x, y, 1)
+        if slope > 0:
+            brightness = clamp(intercept / pivot + slope)
+            return brightness, clamp(slope / brightness)
+
+    # Dark-field frames: nearly everything is black, so compare how far the
+    # bright tail rises above each image's own background.
+    tail = points >= 90.0
+    t_tail = t_points[tail] - t_mid
+    s_tail = s_points[tail] - s_mid
+    usable_tail = usable[tail] & (t_tail > 4.0) & (s_tail > 4.0)
+    if usable_tail.sum() >= 3:
+        gain = float((s_tail[usable_tail] * t_tail[usable_tail]).sum() / (t_tail[usable_tail] ** 2).sum())
+        return clamp(gain), None
+    # Too few bright pixels for that: fall back to the brightest ones.
+    for point in (99.9, 100.0):
+        t_peak = float(np.percentile(target, point)) - t_mid
+        s_peak = float(np.percentile(source, point)) - s_mid
+        if t_peak > 4.0 and s_peak > 4.0:
+            return clamp(s_peak / t_peak), None
+    return None, None   # nothing bright in one of them: no basis for a match
 
 
 # --------------------------------------------------------------------------- #

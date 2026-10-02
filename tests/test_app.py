@@ -2,7 +2,7 @@
 
 import math
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import pytest
 
@@ -432,3 +432,157 @@ def test_new_pinholes_are_offered_first_when_a_reference_is_loaded(app, tmp_path
     assert new_positions == pytest.approx(expected, abs=1)
     app.detect_new_only_var.set(True)
     assert len(app._review_candidates()) == 2
+
+
+def test_reference_images_are_only_offered_when_there_is_a_reference_row(app, tmp_path):
+    stage = make_stage(tmp_path / "1_incoming" / "em9", DOTS)
+    load_stage(app, stage)
+    assert list(app.adjust_target_box.cget("values")) == ["Backlit image", "Frontlit image"]
+    app._write_session(str(stage / "session.json"))
+    app.open_reference_session(str(stage / "session.json"))
+    wait_idle(app)
+    assert len(app.adjust_target_box.cget("values")) == 4
+    app.adjust_target_var.set("Reference frontlit image")
+    app._sync_controls()
+    app.show_reference_var.set(False)
+    app._on_reference_toggle()
+    assert list(app.adjust_target_box.cget("values")) == ["Backlit image", "Frontlit image"]
+    assert app.adjust_target_var.get() == "Backlit image"
+
+
+def test_an_exact_value_can_be_typed_beside_a_slider(app, tmp_path):
+    load_stage(app, make_stage(tmp_path / "s", DOTS))
+    text, commit = app.slider_inputs["Brightness"]
+    assert text.get() == "1.00"
+    text.set("2")
+    commit()
+    assert app.pairs[0].adjust[BACKLIT]["brightness"] == 2.0
+    assert text.get() == "2.00"
+    text.set("99")                      # beyond the slider's range: held at its limit
+    commit()
+    assert app.pairs[0].adjust[BACKLIT]["brightness"] == 3.0
+    text.set("oops")                    # not a number: the box goes back to the real value
+    commit()
+    assert text.get() == "3.00"
+    app.undo()
+    assert app.pairs[0].adjust[BACKLIT]["brightness"] == 1.0
+    assert text.get() == "1.00"
+
+
+def test_image_settings_are_saved_to_a_file_and_loaded_onto_another_image(app, tmp_path, monkeypatch):
+    load_stage(app, make_stage(tmp_path / "a", DOTS))
+    app.adjust_target_var.set("Frontlit image")
+    app._sync_controls()
+    app.pairs[0].adjust[FRONTLIT].update({"brightness": 1.7, "contrast": 1.2, "blacks": 12.0, "whites": 230.0})
+    preset = tmp_path / "frontlit_settings.json"
+    monkeypatch.setattr(filedialog, "asksaveasfilename", lambda **k: str(preset))
+    assert app.save_image_settings() == str(preset)
+    assert read_session(preset)["adjust"]["brightness"] == 1.7
+
+    app.new_session()
+    load_stage(app, make_stage(tmp_path / "b", DOTS))
+    app.adjust_target_var.set("Frontlit image")
+    app._sync_controls()
+    app.load_image_settings(str(preset))
+    wait_idle(app)
+    assert app.pairs[0].adjust[FRONTLIT] == {"brightness": 1.7, "contrast": 1.2, "blacks": 12.0, "whites": 230.0}
+    assert app.pairs[0].adjust[BACKLIT]["brightness"] == 1.0, "the other image is left alone"
+    assert app.slider_inputs["Brightness"][0].get() == "1.70"
+    app.undo()
+    assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.0
+
+
+def test_matching_makes_the_reference_frontlit_look_like_the_current_one(app, tmp_path):
+    import numpy as np
+
+    def textured(folder, gain):
+        folder.mkdir(parents=True)
+        rng = np.random.default_rng(5)
+        base = np.clip(rng.normal(90, 25, (800, 1200)), 10, 170)
+        from PIL import Image
+        Image.fromarray(np.clip(base * gain, 0, 255).astype(np.uint8)).convert("RGB").save(folder / "front.png")
+        make_filter_image(SIZE, DOTS).save(folder / "back.png")
+        return folder
+
+    earlier = textured(tmp_path / "1_incoming" / "em9", 0.75)     # darker exposure
+    load_stage(app, earlier)
+    app._write_session(str(earlier / "session.json"))
+    app.new_session()
+    load_stage(app, textured(tmp_path / "2_shock" / "em9", 1.0))
+    app.open_reference_session(str(earlier / "session.json"))
+    wait_idle(app)
+
+    def shown_median(row):
+        pair = app.pairs[row]
+        values = np.asarray(pair.pyramids[FRONTLIT].levels[-1].convert("L"))
+        lut = pair.lut(FRONTLIT)
+        return float(np.median(values if lut is None else np.asarray(lut)[values]))
+
+    assert shown_median(1) < shown_median(0) - 15
+    app.adjust_target_var.set("Reference frontlit image")
+    app._sync_controls()
+    assert app.match_button.cget("text") == "Match row to current row"
+    app.match_to_other_row()
+    wait_idle(app)
+    assert shown_median(1) == pytest.approx(shown_median(0), abs=3)
+    assert app.pairs[1].adjust[FRONTLIT]["brightness"] == pytest.approx(1 / 0.75, abs=0.06)
+    assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.0
+    # The backlit images are identical here, so matching leaves them as they were.
+    assert app.pairs[1].adjust[BACKLIT]["brightness"] == pytest.approx(1.0, abs=0.02)
+    app.undo()
+    assert app.pairs[1].adjust[FRONTLIT]["brightness"] == 1.0
+
+
+def test_backlit_images_of_different_brightness_are_matched_too(app, tmp_path):
+    import numpy as np
+
+    def stage(folder, dot_value):
+        folder.mkdir(parents=True)
+        spots = [(int(x), int(y)) for x, y in np.random.default_rng(8).uniform((60, 60), (1140, 740), (300, 2))]
+        make_filter_image(SIZE, spots, mesh=False, dot_value=dot_value, background=0).save(folder / "back.png")
+        make_filter_image(SIZE, DOTS, background=60).save(folder / "front.png")
+        return folder
+
+    earlier = stage(tmp_path / "1_incoming" / "em9", 110)       # dimmer pinholes
+    load_stage(app, earlier)
+    app._write_session(str(earlier / "session.json"))
+    app.new_session()
+    load_stage(app, stage(tmp_path / "2_shock" / "em9", 220))
+    app.open_reference_session(str(earlier / "session.json"))
+    wait_idle(app)
+    app.adjust_target_var.set("Reference backlit image")
+    app._sync_controls()
+    app.match_to_other_row()
+    wait_idle(app)
+    assert app.pairs[1].adjust[BACKLIT]["brightness"] == pytest.approx(2.0, abs=0.1)
+    assert app.pairs[1].adjust[BACKLIT]["contrast"] == 1.0
+
+
+def test_an_unsure_candidate_gets_a_question_mark(app, tmp_path):
+    stage = make_stage(tmp_path / "1_incoming" / "em9", DOTS)
+    load_stage(app, stage)
+    app.set_tool("detect")
+    canvas = pane(app, 0, BACKLIT).canvas
+    drag(app, pane(app, 0, BACKLIT), (2, 2), (canvas.winfo_width() - 2, canvas.winfo_height() - 2))
+    wait_idle(app)
+    app.review_unsure()
+    app.review_accept()
+    wait_idle(app)
+    app._on_escape()
+    first, second = app.pairs[0].annotations
+    assert first["label"] == "P1" and first["unsure"] is True
+    assert second["label"] == "P2" and "unsure" not in second, "numbering carries on past an unsure marker"
+    assert app.pairs[0].legend() == [("#ff0000", "Pinholes  (n=2, 1 unsure)")]
+
+    shown = [canvas.itemcget(item, "text") for item in canvas.find_withtag("world")
+             if canvas.type(item) == "text"]
+    assert "P1?" in shown and "P2" in shown
+
+    app._write_session(str(stage / "session.json"))
+    app.new_session()
+    app.open_session(str(stage / "session.json"))
+    wait_idle(app)
+    assert app.pairs[0].annotations[0].get("unsure") is True
+    app._toggle_annotation_unsure(0)
+    assert "unsure" not in app.pairs[0].annotations[0]
+    assert app.pairs[0].legend() == [("#ff0000", "Pinholes  (n=2)")]

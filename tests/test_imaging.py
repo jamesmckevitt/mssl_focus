@@ -114,3 +114,63 @@ def test_match_tone_keeps_blown_highlights_white():
     shown = lut[target.astype(np.uint8)]
     assert shown[-1] >= 250
     assert np.median(shown[:6000]) == pytest.approx(np.median(source[:6000]), abs=5)
+
+
+def _noisy_frames(folder, count, seed=0):
+    """Several exposures of the same scene: one bright spot on a dark, noisy background."""
+    rng = np.random.default_rng(seed)
+    scene = np.full((120, 160, 3), 20.0)
+    scene[60:64, 80:84] = 200.0
+    paths = []
+    for n in range(count):
+        frame = np.clip(scene + rng.normal(0, 8, scene.shape), 0, 255).astype(np.uint8)
+        path = folder / f"frame{n}.png"
+        Image.fromarray(frame).save(path)
+        paths.append(str(path))
+    return paths
+
+
+def test_averaging_exposures_reduces_noise_and_keeps_the_signal(tmp_path):
+    paths = _noisy_frames(tmp_path, 4)
+    single = np.asarray(open_image(paths[0])).astype(float)
+    stacked_image = open_image(paths[0], develop={"frames": paths[1:]})
+    stacked = np.asarray(stacked_image).astype(float)
+    assert stacked[:40, :40].std() < 0.6 * single[:40, :40].std()      # about half with four frames
+    assert stacked[60:64, 80:84].mean() == pytest.approx(200, abs=4)
+    assert stacked_image.info["camera"]["frames"] == 4
+
+
+def test_a_dark_frame_removes_hot_pixels_and_stray_light_but_not_the_signal(tmp_path):
+    rng = np.random.default_rng(1)
+    fixed = np.zeros((120, 160, 3))
+    fixed[30, 40] = 180.0               # a hot pixel
+    fixed[90:110, 10:60] = 60.0         # stray light on the holder
+    scene = np.full((120, 160, 3), 12.0)
+    scene[60:64, 80:84] = 200.0         # the pinhole: only there when the light is on
+    light = np.clip(scene + fixed + rng.normal(0, 3, scene.shape), 0, 255).astype(np.uint8)
+    dark = np.clip(12.0 + fixed + rng.normal(0, 3, scene.shape), 0, 255).astype(np.uint8)
+    Image.fromarray(light).save(tmp_path / "light.png")
+    Image.fromarray(dark).save(tmp_path / "dark.png")
+    plain = np.asarray(open_image(str(tmp_path / "light.png"))).astype(float)
+    cleaned_image = open_image(str(tmp_path / "light.png"), develop={"dark": [str(tmp_path / "dark.png")]})
+    cleaned = np.asarray(cleaned_image).astype(float)
+    assert plain[30, 40].mean() > 150 and cleaned[30, 40].mean() < 40
+    assert cleaned[90:110, 10:60].mean() == pytest.approx(12, abs=6)
+    assert cleaned[60:64, 80:84].mean() == pytest.approx(200, abs=6)
+    assert cleaned[:20, 100:].std() < 1.2 * plain[:20, 100:].std(), "no extra noise where the dark frame is empty"
+    assert cleaned_image.info["camera"]["dark_frames"] == 1
+
+
+def test_frames_of_different_exposure_or_size_are_refused(tmp_path):
+    from tests.test_camera import save_with_exif
+
+    a = str(save_with_exif(tmp_path / "a.jpg", 8, (10, 1)))
+    b = str(save_with_exif(tmp_path / "b.jpg", 8, (5, 1)))
+    with pytest.raises(ValueError, match="same settings"):
+        open_image(a, develop={"frames": [b]})
+    small = tmp_path / "small.png"
+    Image.new("RGB", (10, 10)).save(small)
+    big = tmp_path / "big.png"
+    Image.new("RGB", (20, 20)).save(big)
+    with pytest.raises(ValueError, match="same size"):
+        open_image(str(big), develop={"frames": [str(small)]})

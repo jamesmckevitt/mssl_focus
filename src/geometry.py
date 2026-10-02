@@ -119,3 +119,18 @@ def decompose_about(matrix, centre):
     cx, cy = centre
     moved_cx, moved_cy = apply(matrix, cx, cy)
     return scale, deg, moved_cx - cx, moved_cy - cy
+
+
+def rounded_rectangle(x0, y0, x1, y1, radius, steps=10):
+    """Points around a rectangle with rounded corners, clockwise from the top-left arc."""
+    radius = max(0.0, min(radius, (x1 - x0) / 2.0, (y1 - y0) / 2.0))
+    if radius <= 0.0:
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    points = []
+    # centre of each corner arc and the angle (degrees) at which that arc starts
+    for cx, cy, start in ((x0 + radius, y0 + radius, 180.0), (x1 - radius, y0 + radius, 270.0),
+                          (x1 - radius, y1 - radius, 0.0), (x0 + radius, y1 - radius, 90.0)):
+        for n in range(steps + 1):
+            angle = math.radians(start + 90.0 * n / steps)
+            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    return points

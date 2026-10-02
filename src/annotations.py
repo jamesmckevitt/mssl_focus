@@ -228,6 +228,8 @@ class AnnotationMixin:
                 copied["unsure"] = True
             current.annotations.append(copied)
             added += 1
+        if not current.outline:
+            current.outline = [list(p) for p in self.effective_outline()]
         for colour, name in reference.colour_labels.items():
             current.colour_labels.setdefault(colour, name)
         for colour, prefix in reference.label_prefixes.items():

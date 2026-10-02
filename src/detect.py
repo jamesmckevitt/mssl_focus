@@ -4,12 +4,16 @@ import math
 
 import numpy as np
 
-# name: (threshold in local noise sigmas, minimum contrast in 8-bit levels)
-SENSITIVITY = {
-    "low": (12.0, 45.0),
-    "normal": (7.0, 25.0),
-    "high": (4.5, 14.0),
-}
+# How sure the search is about a spot, strictest first.  A spot gets the first
+# tier whose test it passes: (name, threshold in local noise sigmas, minimum
+# contrast in 8-bit levels).  Checked against hand-made maps, "clear" spots were
+# almost always marked by the inspector and "faint" ones almost never.
+TIERS = [
+    ("clear", 12.0, 45.0),
+    ("likely", 7.0, 25.0),
+    ("faint", 4.5, 14.0),
+]
+TIER_ORDER = {name: n for n, (name, _s, _c) in enumerate(TIERS)}
 
 MIN_AREA = 3          # pixels; smaller is indistinguishable from sensor noise
 MAX_AREA = 900        # larger is a tear, an edge or stray light, not a pinhole
@@ -17,19 +21,19 @@ MAX_BACKGROUND = 90   # ignore regions flooded with light (frame edges, leaks)
 COARSE = 8            # background and noise are estimated at 1/8 scale
 
 
-def find_pinholes(image, sensitivity="normal", limit=400):
-    """Return candidate pinholes in ``image`` (a PIL image), strongest first.
+def find_pinholes(image, mask=None, limit=4000):
+    """Return ``(candidates, total)`` for ``image`` (a PIL image), surest and brightest first.
 
-    Each candidate is a dict with ``x``, ``y`` (pixel coordinates of the
-    centre), ``radius`` (pixels), ``peak`` (brightness above the local
-    background) and ``snr``.
+    ``mask``, if given, is an array the size of the image; only spots where it is
+    non-zero are reported.  Each candidate is a dict with ``x``, ``y`` (pixel
+    coordinates of the centre), ``radius`` (pixels), ``peak`` (brightness above the
+    local background), ``snr`` and ``tier`` (see ``TIERS``).
     """
     import cv2
 
     arr = np.asarray(image)
     grey = (arr.max(axis=2) if arr.ndim == 3 else arr).astype(np.float32)
     height, width = grey.shape
-    sigmas, min_contrast = SENSITIVITY.get(sensitivity, SENSITIVITY["normal"])
 
     # Slowly varying background, robust to the spots themselves.
     small = cv2.resize(grey, (max(1, width // COARSE), max(1, height // COARSE)), interpolation=cv2.INTER_AREA)
@@ -50,8 +54,11 @@ def find_pinholes(image, sensitivity="normal", limit=400):
     # The blur above cuts pixel noise to roughly a quarter.
     noise_after_blur = np.maximum(noise * 0.25, 0.4)
 
-    mask = (residual > np.maximum(sigmas * noise_after_blur, min_contrast)) & (background < MAX_BACKGROUND)
-    count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    _name, faint_sigmas, faint_contrast = TIERS[-1]
+    found = (residual > np.maximum(faint_sigmas * noise_after_blur, faint_contrast)) & (background < MAX_BACKGROUND)
+    if mask is not None:
+        found &= np.asarray(mask) > 0
+    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(found.astype(np.uint8), connectivity=8)
 
     candidates = []
     for i in range(1, count):
@@ -65,18 +72,22 @@ def find_pinholes(image, sensitivity="normal", limit=400):
         x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
         patch = residual[y0:y0 + h, x0:x0 + w]
         peak = float(patch.max())
-        cy, cx = centroids[i][1], centroids[i][0]
+        cx, cy = float(centroids[i][0]), float(centroids[i][1])
         local_noise = float(noise_after_blur[min(height - 1, int(cy)), min(width - 1, int(cx))])
+        # A tier needs a few pixels above its own threshold, so a single hot
+        # pixel, however bright, never counts as more than faint.
+        tier = next((name for name, sigmas, contrast in TIERS[:-1]
+                     if int((patch > max(sigmas * local_noise, contrast)).sum()) >= MIN_AREA), TIERS[-1][0])
         candidates.append({
-            "x": float(cx) + 0.5,
-            "y": float(cy) + 0.5,
+            "x": cx + 0.5,
+            "y": cy + 0.5,
             "radius": max(1.5, math.sqrt(area / math.pi)),
             "peak": peak,
             "snr": peak / local_noise,
+            "tier": tier,
         })
-    candidates.sort(key=lambda c: -c["peak"])
-    total = len(candidates)
-    return candidates[:limit], total
+    candidates.sort(key=lambda c: (TIER_ORDER[c["tier"]], -c["peak"]))
+    return candidates[:limit], len(candidates)
 
 
 def split_by_markers(candidates, markers, tolerance=12.0):
@@ -92,6 +103,15 @@ def split_by_markers(candidates, markers, tolerance=12.0):
     return fresh, marked
 
 
+def markers_without_a_spot(markers, candidates, tolerance=12.0):
+    """Indices of ``markers`` (``(x, y, radius)``) with no candidate under them."""
+    lonely = []
+    for n, (x, y, radius) in enumerate(markers):
+        if not any(math.hypot(c["x"] - x, c["y"] - y) <= max(radius, tolerance) for c in candidates):
+            lonely.append(n)
+    return lonely
+
+
 def flag_present_in(candidates, others, tolerance=10.0):
     """Mark each candidate with whether a spot in ``others`` (a list of ``(x, y)``
     in the same pixel space) lies at the same place."""
@@ -104,3 +124,14 @@ def flag_present_in(candidates, others, tolerance=10.0):
         distances = np.hypot(points[:, 0] - candidate["x"], points[:, 1] - candidate["y"])
         candidate["in_reference"] = bool(distances.min() <= tolerance)
     return candidates
+
+
+def point_in_polygon(x, y, polygon):
+    inside = False
+    n = len(polygon)
+    for i in range(n):
+        x0, y0 = polygon[i]
+        x1, y1 = polygon[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < (x1 - x0) * (y - y0) / (y1 - y0) + x0:
+            inside = not inside
+    return inside

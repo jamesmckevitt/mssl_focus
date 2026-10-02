@@ -5,7 +5,7 @@ import copy
 import re
 
 from . import geometry as geo
-from .imaging import RAW_DEVELOP_DEFAULTS, RAW_NOISE_LEVELS, build_lut
+from .imaging import RAW_NOISE_LEVELS, build_lut, default_develop
 
 BACKLIT = 0
 FRONTLIT = 1
@@ -51,8 +51,9 @@ class ImagePair:
         self.glob_rot = 0.0
         self.adjust = [dict(ADJUST_DEFAULTS), dict(ADJUST_DEFAULTS)]
         self.nr = [dict(NR_DEFAULTS), dict(NR_DEFAULTS)]
-        self.develop = [dict(RAW_DEVELOP_DEFAULTS), dict(RAW_DEVELOP_DEFAULTS)]   # camera RAW files only
+        self.develop = [default_develop(), default_develop()]   # how each image is built from its file(s)
         self.camera = [{}, {}]            # exposure settings read from each file
+        self.outline = []                 # edge of the filter membrane, in backlit pixels
         self.annotations = []
         self.colour_labels = {}
         self.label_prefixes = {}
@@ -206,12 +207,14 @@ class ImagePair:
 
     def apply_develop_records(self, records):
         for i in range(2):
-            self.develop[i] = dict(RAW_DEVELOP_DEFAULTS)
+            self.develop[i] = default_develop()
             if records and i < len(records) and isinstance(records[i], dict):
-                noise = str(records[i].get("noise", RAW_DEVELOP_DEFAULTS["noise"])).lower()
+                noise = str(records[i].get("noise", "standard")).lower()
                 self.develop[i] = {
                     "exposure": max(-4.0, min(6.0, _as_float(records[i].get("exposure"), 0.0))),
-                    "noise": noise if noise in RAW_NOISE_LEVELS else RAW_DEVELOP_DEFAULTS["noise"],
+                    "noise": noise if noise in RAW_NOISE_LEVELS else "standard",
+                    "frames": [p for p in records[i].get("frames") or [] if isinstance(p, str)],
+                    "dark": [p for p in records[i].get("dark") or [] if isinstance(p, str)],
                 }
 
     def snapshot(self):
@@ -221,6 +224,7 @@ class ImagePair:
             "annotations": self.annotations,
             "colour_labels": self.colour_labels,
             "label_prefixes": self.label_prefixes,
+            "outline": self.outline,
         })
 
     def restore(self, snap):
@@ -230,6 +234,7 @@ class ImagePair:
         self.annotations = snap["annotations"]
         self.colour_labels = snap["colour_labels"]
         self.label_prefixes = snap["label_prefixes"]
+        self.outline = snap["outline"]
 
 
 def _as_float(value, default):

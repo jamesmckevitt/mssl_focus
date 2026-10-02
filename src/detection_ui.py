@@ -1,72 +1,156 @@
-"""Automatic pinhole search and the review of what it finds."""
+"""The filter outline, the automatic pinhole search, and the review of what it finds."""
 
 from tkinter import messagebox
 
 import numpy as np
+from PIL import Image, ImageDraw
 
 from . import geometry as geo
-from .detect import find_pinholes, flag_present_in, split_by_markers
+from .detect import (
+    TIER_ORDER,
+    find_pinholes,
+    flag_present_in,
+    markers_without_a_spot,
+    point_in_polygon,
+    split_by_markers,
+)
 from .pair import BACKLIT
 from .viewer import CURRENT, REFERENCE
 
 REVIEW_ZOOM = 2.0
-MARGIN = 40  # pixels of context searched around the chosen region
+MARGIN = 40  # pixels of context around the searched region, for the background estimate
 
 
 class DetectMixin:
     # ------------------------------------------------------------------ #
+    # Filter outline
+    # ------------------------------------------------------------------ #
+
+    def effective_outline(self):
+        """The filter outline in current-row backlit pixels: the row's own, or
+        failing that the reference row's, carried across by the row alignment."""
+        current, reference = self.pairs
+        if len(current.outline) >= 3:
+            return [tuple(p) for p in current.outline]
+        if self._reference_ready() and len(reference.outline) >= 3:
+            across = geo.invert(self.world_matrix(CURRENT, BACKLIT)) @ self.world_matrix(REFERENCE, BACKLIT)
+            return [tuple(p) for p in geo.apply_many(across, reference.outline)]
+        return []
+
+    def _prepare_outline_tool(self):
+        """Pick up an existing outline so its rounding and inset can be adjusted."""
+        pair = self.pairs[CURRENT]
+        self._outline_rect = None
+        if len(pair.outline) >= 3:
+            points = geo.apply_many(pair.matrix(BACKLIT), pair.outline)
+            self._outline_rect = (float(points[:, 0].min()), float(points[:, 1].min()),
+                                  float(points[:, 0].max()), float(points[:, 1].max()))
+            self._syncing = True
+            self.outline_inset_var.set("0")
+            self._syncing = False
+
+    def _set_outline_from_drag(self, pane, x0, y0, x1, y1):
+        if pane.row != CURRENT:
+            self.set_status("Draw the outline on the current (top) row; the reference row keeps its own.")
+            return
+        ax, ay = self.canvas_to_pair(CURRENT, x0, y0)
+        bx, by = self.canvas_to_pair(CURRENT, x1, y1)
+        self._outline_rect = (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+        self._rebuild_outline()
+        self.set_status("Outline set.  Adjust 'Corner radius' until the corners follow the filter edge, "
+                        "and 'Inset' to pull the line just inside it.")
+
+    def _rebuild_outline(self):
+        if self._syncing or self._outline_rect is None:
+            return
+        try:
+            radius = max(0.0, float(self.outline_radius_var.get()))
+            inset = float(self.outline_inset_var.get())
+        except ValueError:
+            return
+        x0, y0, x1, y1 = self._outline_rect
+        x0, y0, x1, y1 = x0 + inset, y0 + inset, x1 - inset, y1 - inset
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return
+        pair = self.pairs[CURRENT]
+        self._checkpoint("Set filter outline", coalesce="outline")
+        points = geo.rounded_rectangle(x0, y0, x1, y1, radius)
+        pair.outline = [[float(x), float(y)] for x, y in geo.apply_many(geo.invert(pair.matrix(BACKLIT)), points)]
+        self._refresh_hint()
+        self._draw_overlays()
+
+    def clear_outline(self):
+        if self.pairs[CURRENT].outline:
+            self._checkpoint("Clear filter outline")
+            self.pairs[CURRENT].outline = []
+        self._outline_rect = None
+        self._refresh_hint()
+        self._draw_overlays()
+
+    def _draw_outline(self, pane):
+        if self.tool_var.get() not in ("outline", "detect", "review"):
+            return
+        outline = self.effective_outline() if pane.row == CURRENT else self.pairs[REFERENCE].outline
+        if len(outline) < 3:
+            return
+        flat = []
+        for x, y in outline:
+            flat.extend(self.image_to_canvas(pane.row, BACKLIT, x, y))
+        own = pane.row == REFERENCE or len(self.pairs[CURRENT].outline) >= 3
+        pane.canvas.create_polygon(*flat, outline="#4fd0ff" if own else "#b48cff", fill="",
+                                   width=self.px(2), dash=(8, 5), tags="world")
+
+    # ------------------------------------------------------------------ #
     # Search
     # ------------------------------------------------------------------ #
 
-    def _search_region(self, row, canvas_rect):
-        """Canvas rectangle -> (crop box in backlit pixels, canvas-to-image test)."""
-        x0, y0, x1, y1 = canvas_rect
-        to_image = geo.invert(self.canvas_matrix(row, BACKLIT))
-        corners = geo.apply_many(to_image, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+    def _detect_in(self, row, world_polygon):
+        """Spots of one row's backlit image inside a region given in world coordinates."""
+        polygon = geo.apply_many(geo.invert(self.world_matrix(row, BACKLIT)), world_polygon)
         width, height = self.pairs[row].size(BACKLIT)
-        left = int(max(0, np.floor(corners[:, 0].min()) - MARGIN))
-        top = int(max(0, np.floor(corners[:, 1].min()) - MARGIN))
-        right = int(min(width, np.ceil(corners[:, 0].max()) + MARGIN))
-        bottom = int(min(height, np.ceil(corners[:, 1].max()) + MARGIN))
-        return (left, top, right, bottom)
-
-    def _detect_in(self, row, canvas_rect, sensitivity):
-        """Candidates of one row's backlit image inside a canvas rectangle, in image pixels."""
-        box = self._search_region(row, canvas_rect)
-        if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+        left = int(max(0, np.floor(polygon[:, 0].min()) - MARGIN))
+        top = int(max(0, np.floor(polygon[:, 1].min()) - MARGIN))
+        right = int(min(width, np.ceil(polygon[:, 0].max()) + MARGIN))
+        bottom = int(min(height, np.ceil(polygon[:, 1].max()) + MARGIN))
+        if right - left < 8 or bottom - top < 8:
             return [], 0
-        image = self.pairs[row].pyramids[BACKLIT].image.crop(box)
-        found, total = find_pinholes(image, sensitivity)
-        to_canvas = self.canvas_matrix(row, BACKLIT)
-        x0, y0, x1, y1 = canvas_rect
-        inside = []
+        image = self.pairs[row].pyramids[BACKLIT].image.crop((left, top, right, bottom))
+        mask = Image.new("L", image.size, 0)
+        ImageDraw.Draw(mask).polygon([(float(x) - left, float(y) - top) for x, y in polygon], fill=255)
+        found, total = find_pinholes(image, mask=np.asarray(mask))
         for candidate in found:
-            candidate["x"] += box[0]
-            candidate["y"] += box[1]
-            cx, cy = geo.apply(to_canvas, candidate["x"], candidate["y"])
-            if x0 <= cx <= x1 and y0 <= cy <= y1:
-                inside.append(candidate)
-        return inside, total
+            candidate["x"] += left
+            candidate["y"] += top
+        return found, total
 
-    def find_pinholes_in(self, canvas_rect):
-        """Search the current backlit image inside a canvas rectangle and start the review."""
+    def find_pinholes_in(self, canvas_rect=None):
+        """Search the current backlit image -- inside the filter outline, or inside a
+        canvas rectangle if one is given -- and start the review."""
         current, reference = self.pairs
         if not current.has_image(BACKLIT):
             self.set_status("Load a backlit image first.")
             return
-        sensitivity = self.detect_sensitivity_var.get().lower()
+        if canvas_rect is not None:
+            x0, y0, x1, y1 = canvas_rect
+            world_polygon = geo.apply_many(geo.invert(self.view_matrix()), [(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        else:
+            outline = self.effective_outline()
+            if len(outline) < 3:
+                self.set_status("Draw the filter outline first (Outline tool), or drag a rectangle to search.")
+                return
+            world_polygon = geo.apply_many(self.world_matrix(CURRENT, BACKLIT), outline)
         with_reference = self._reference_ready() and reference.has_image(BACKLIT)
-        to_canvas = self.canvas_matrix(CURRENT, BACKLIT)
-        from_reference = geo.invert(self.world_matrix(CURRENT, BACKLIT)) @ self.world_matrix(REFERENCE, BACKLIT) \
-            if with_reference else None
+        from_reference = (geo.invert(self.world_matrix(CURRENT, BACKLIT)) @ self.world_matrix(REFERENCE, BACKLIT)
+                          if with_reference else None)
+        region = [tuple(p) for p in geo.apply_many(geo.invert(self.world_matrix(CURRENT, BACKLIT)), world_polygon)]
 
         def work():
-            found, total = self._detect_in(CURRENT, canvas_rect, sensitivity)
+            found, _total = self._detect_in(CURRENT, world_polygon)
             earlier = []
             if with_reference:
-                ref_found, _ = self._detect_in(REFERENCE, canvas_rect, sensitivity)
+                ref_found, _ = self._detect_in(REFERENCE, world_polygon)
                 earlier = [geo.apply(from_reference, c["x"], c["y"]) for c in ref_found]
-            return found, total, earlier
+            return found, earlier
 
         def finished(results):
             result = results[0]
@@ -74,28 +158,40 @@ class DetectMixin:
                 messagebox.showerror("Find pinholes", f"The search failed.\n\n{result}", parent=self.root)
                 self.set_tool("pan")
                 return
-            found, total, earlier = result
-            markers = [(a["img1_x"], a["img1_y"], a["radius"]) for a in current.annotations]
-            fresh, marked = split_by_markers(found, markers)
+            found, earlier = result
+            inside = [a for a in current.annotations if point_in_polygon(a["img1_x"], a["img1_y"], region)]
+            fresh, marked = split_by_markers(found, [(a["img1_x"], a["img1_y"], a["radius"])
+                                                    for a in current.annotations])
+            lonely = markers_without_a_spot([(a["img1_x"], a["img1_y"], a["radius"]) for a in inside], found)
             flag_present_in(fresh, earlier)
-            if with_reference:
-                # Spots absent from the earlier inspection are the interesting ones: show them first.
-                fresh.sort(key=lambda c: (c["in_reference"], -c["peak"]))
+            # Surest first; with a reference row, spots absent from the earlier image before the rest.
+            fresh.sort(key=lambda c: (c["in_reference"], TIER_ORDER[c["tier"]], -c["peak"]))
             self._candidates = fresh
             self._candidate_index = 0
             self._candidate_summary = {
-                "found": len(found), "marked": len(marked),
-                "new": sum(1 for c in fresh if not c["in_reference"]), "with_reference": with_reference,
+                "marked": len(marked),
+                "with_reference": with_reference,
+                "new": sum(1 for c in fresh if not c["in_reference"] and c["tier"] != "faint"),
+                "lonely": [inside[n].get("label") or "unlabelled" for n in lonely],
             }
-            if not fresh:
+            counts = {tier: sum(1 for c in fresh if c["tier"] == tier) for tier in TIER_ORDER}
+            lonely_note = ""
+            if lonely:
+                names = ", ".join(self._candidate_summary["lonely"][:8]) + ("..." if len(lonely) > 8 else "")
+                lonely_note = f"  {len(lonely)} existing marker(s) have no bright spot under them: {names}."
+            if not self._review_candidates():
                 self.set_tool("pan")
                 self.set_status(
-                    f"Found {len(found)} bright spots in that region; all {len(marked)} already have markers."
-                    if found else "No bright spots found in that region.  Try a higher sensitivity.")
+                    f"Nothing new: {len(marked)} spot(s) already have markers"
+                    + (f", and {counts['faint']} faint spot(s) were left out" if counts["faint"] else "")
+                    + "." + lonely_note)
                 return
             self.tool_var.set("review")
             self._on_tool_changed()
             self._show_candidate()
+            self.set_status(
+                f"Found {counts['clear']} clear, {counts['likely']} likely and {counts['faint']} faint spot(s) "
+                f"without a marker; {len(marked)} already marked." + lonely_note)
 
         self._run_in_background(
             "Finding pinholes", [("Searching the backlit image for small bright spots...", work)], finished)
@@ -105,10 +201,13 @@ class DetectMixin:
     # ------------------------------------------------------------------ #
 
     def _review_candidates(self):
-        """The candidates still awaiting a decision, honouring the 'new only' filter."""
+        """The candidates still awaiting a decision, honouring the 'faint' and 'new only' choices."""
+        pending = self._candidates
+        if not self.detect_faint_var.get():
+            pending = [c for c in pending if c["tier"] != "faint"]
         if self.detect_new_only_var.get() and self._candidate_summary.get("with_reference"):
-            return [c for c in self._candidates if not c["in_reference"]]
-        return self._candidates
+            pending = [c for c in pending if not c["in_reference"]]
+        return pending
 
     def _current_candidate(self):
         pending = self._review_candidates()
@@ -134,57 +233,42 @@ class DetectMixin:
         self._refresh_hint()
         self._schedule_render()
 
-    def review_accept(self):
+    def _decide(self, accept, unsure=False):
         candidate = self._current_candidate()
         if candidate is None:
             return
-        if not self._add_candidate_markers([candidate]):
+        if accept and not self._add_candidate_markers([candidate], unsure=unsure):
             return
         self._candidates.remove(candidate)
         self._show_candidate()
+
+    def review_accept(self):
+        self._decide(True)
 
     def review_unsure(self):
         """Accept the candidate, flagged with a question mark as one to look at again."""
-        candidate = self._current_candidate()
-        if candidate is None:
-            return
-        if not self._add_candidate_markers([candidate], unsure=True):
-            return
-        self._candidates.remove(candidate)
-        self._show_candidate()
+        self._decide(True, unsure=True)
+
+    def review_reject(self):
+        self._decide(False)
 
     def review_skip(self, step=1):
         pending = self._review_candidates()
-        if not pending:
-            self._finish_review()
-            return
-        if step > 0 and self._candidate_index >= len(pending) - 1:
+        if not pending or (step > 0 and self._candidate_index >= len(pending) - 1):
             self._finish_review()
             return
         self._candidate_index = max(0, self._candidate_index + step)
         self._show_candidate()
 
-    def review_reject(self):
-        candidate = self._current_candidate()
-        if candidate is None:
-            return
-        self._candidates.remove(candidate)
-        self._show_candidate()
-
-    def review_accept_all(self):
-        pending = list(self._review_candidates())
-        if not pending:
-            return
-        if not messagebox.askyesno(
-                "Find pinholes",
-                f"Add a marker for all {len(pending)} remaining candidates?\n\n"
-                "Each becomes a marker in the colour in use.  Ctrl+Z removes them again.",
-                parent=self.root):
-            return
-        if self._add_candidate_markers(pending):
-            for candidate in pending:
+    def review_accept_clear(self):
+        """Add markers for every remaining candidate the search is confident about."""
+        clear = [c for c in self._review_candidates() if c["tier"] == "clear"]
+        if clear and self._add_candidate_markers(clear):
+            for candidate in clear:
                 self._candidates.remove(candidate)
-            self._finish_review()
+            self._candidate_index = 0
+            self.set_status(f"Added {len(clear)} marker(s) for the clear spots.  Ctrl+Z removes them again.")
+            self._show_candidate()
 
     def _add_candidate_markers(self, candidates, unsure=False):
         pair = self.pairs[CURRENT]
@@ -218,6 +302,7 @@ class DetectMixin:
         self._draw_overlays()
 
     def _draw_candidates(self, pane):
+        self._draw_outline(pane)
         if self.tool_var.get() != "review" or pane.row != CURRENT:
             return
         current = self._current_candidate()

@@ -64,6 +64,7 @@ class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, Too
         self._candidates = []
         self._candidate_index = 0
         self._candidate_summary = {}
+        self._outline_rect = None
         self._tool_state = {"row": None, "a": [], "b": [], "cur": [], "ref": []}
 
         self._restore_window()

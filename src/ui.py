@@ -97,9 +97,14 @@ class UIBuilderMixin:
         self.match_direction_var = tk.StringVar(value=MATCH_DIRECTIONS[0][0])
         self.match_scope_var = tk.StringVar(value=MATCH_SCOPES[0][0])
         self.raw_exposure_var = tk.StringVar(value="0.0")
+        self.frames_info_var = tk.StringVar()
+        self.dark_info_var = tk.StringVar()
         self.raw_noise_var = tk.StringVar(value="Standard")
         self.detect_sensitivity_var = tk.StringVar(value="Normal")
         self.detect_new_only_var = tk.BooleanVar(value=False)
+        self.detect_faint_var = tk.BooleanVar(value=False)
+        self.outline_radius_var = tk.StringVar(value="200")
+        self.outline_inset_var = tk.StringVar(value="0")
 
         self.hint_title_var = tk.StringVar()
         self.hint_text_var = tk.StringVar()
@@ -150,6 +155,8 @@ class UIBuilderMixin:
         edit_menu.add_command(label="Undo", accelerator="Ctrl+Z", command=self.undo)
         edit_menu.add_command(label="Redo", accelerator="Ctrl+Y", command=self.redo)
         edit_menu.add_separator()
+        edit_menu.add_command(label="Set filter outline...", accelerator="T",
+                              command=lambda: self.set_tool("outline"))
         edit_menu.add_command(label="Find pinholes...", accelerator="D",
                               command=lambda: self.set_tool("detect"))
         edit_menu.add_command(label="Copy markers from reference row...", command=self.copy_reference_annotations)
@@ -285,12 +292,31 @@ class UIBuilderMixin:
                                      command=self.apply_tool_points, takefocus=False)
         self.hint_done = ttk.Button(self.hint_actions, text="Done", command=lambda: self.set_tool("pan"),
                                     takefocus=False)
-        self.hint_sensitivity_label = ttk.Label(self.hint_actions, text="Sensitivity", style="Hint.TLabel")
-        self.hint_sensitivity = ttk.Combobox(self.hint_actions, textvariable=self.detect_sensitivity_var,
-                                             values=["Low", "Normal", "High"], state="readonly", width=8,
-                                             takefocus=False)
-        Tooltip(self.hint_sensitivity,
-                "Low: only clear, bright spots.\nHigh: also faint spots, with more false alarms.")
+        self.hint_search = ttk.Button(self.hint_actions, text="Search", style="Accent.TButton",
+                                      command=self.find_pinholes_in, takefocus=False)
+        self.hint_outline_widgets = []
+        for label, var, low, high, step, tip in (
+            ("Corner radius", self.outline_radius_var, 0, 3000, 10,
+             "How rounded the corners of the outline are, in image pixels."),
+            ("Inset", self.outline_inset_var, -500, 1000, 2,
+             "Shrinks the outline evenly, in image pixels, to keep it just inside the frame edge."),
+        ):
+            name = ttk.Label(self.hint_actions, text=label, style="Hint.TLabel")
+            box = ttk.Spinbox(self.hint_actions, textvariable=var, from_=low, to=high, increment=step,
+                              width=6, command=self._rebuild_outline)
+            box.bind("<Return>", lambda _e: (self._rebuild_outline(), self.panes[0].canvas.focus_set()))
+            box.bind("<FocusOut>", lambda _e: self._rebuild_outline())
+            Tooltip(box, tip)
+            self.hint_outline_widgets += [name, box]
+        self.hint_clear_outline = ttk.Button(self.hint_actions, text="Clear outline",
+                                             command=self.clear_outline, takefocus=False)
+        self.hint_find = ttk.Button(self.hint_actions, text="Find pinholes", style="Accent.TButton",
+                                    command=lambda: self.set_tool("detect"), takefocus=False)
+        self.hint_faint = ttk.Checkbutton(self.hint_actions, text="Include faint", variable=self.detect_faint_var,
+                                          style="Hint.TCheckbutton", takefocus=False,
+                                          command=self._on_new_only_toggle)
+        Tooltip(self.hint_faint, "Also step through the faint spots.  Most are noise, but the very "
+                                 "faintest pinholes are among them.")
         self.hint_new_only = ttk.Checkbutton(self.hint_actions, text="Only new since reference",
                                              variable=self.detect_new_only_var, style="Hint.TCheckbutton",
                                              takefocus=False, command=self._on_new_only_toggle)
@@ -303,8 +329,10 @@ class UIBuilderMixin:
         self.hint_skip = ttk.Button(self.hint_actions, text="Skip", command=self.review_skip, takefocus=False)
         self.hint_reject = ttk.Button(self.hint_actions, text="Not a pinhole", command=self.review_reject,
                                       takefocus=False)
-        self.hint_accept_all = ttk.Button(self.hint_actions, text="Accept all", command=self.review_accept_all,
-                                          takefocus=False)
+        self.hint_accept_clear = ttk.Button(self.hint_actions, text="Accept clear",
+                                            command=self.review_accept_clear, takefocus=False)
+        Tooltip(self.hint_accept_clear, "Add markers for every remaining spot the search is confident "
+                                        "about, in one go.  Ctrl+Z undoes it.")
 
         self.hint_label = ttk.Label(bar, textvariable=self.hint_text_var, style="Hint.TLabel",
                                     justify=tk.LEFT, anchor=tk.W)
@@ -321,14 +349,23 @@ class UIBuilderMixin:
             widget.pack_forget()
         tool = self.tool_var.get()
         pad = self.px(3)
-        if kind == "detect":
-            self.hint_sensitivity_label.pack(side=tk.LEFT, padx=(pad, self.px(6)))
-            self.hint_sensitivity.pack(side=tk.LEFT, padx=(0, self.px(10)))
+        if kind == "outline":
+            for widget in self.hint_outline_widgets:
+                widget.pack(side=tk.LEFT, padx=pad)
+            self.hint_clear_outline.pack(side=tk.LEFT, padx=(self.px(10), pad))
+            self.hint_find.pack(side=tk.LEFT, padx=pad)
+        elif kind == "detect":
+            self.hint_search.pack(side=tk.LEFT, padx=pad)
+            self.hint_search.state(["!disabled"] if self.effective_outline() else ["disabled"])
         elif kind == "review":
+            self.hint_faint.pack(side=tk.LEFT, padx=(pad, self.px(6)))
             if self._candidate_summary.get("with_reference"):
                 self.hint_new_only.pack(side=tk.LEFT, padx=(pad, self.px(10)))
-            for widget in (self.hint_accept, self.hint_unsure, self.hint_skip, self.hint_reject,
-                           self.hint_accept_all):
+            clear = sum(1 for c in self._review_candidates() if c["tier"] == "clear")
+            self.hint_accept_clear.configure(text=f"Accept {clear} clear")
+            self.hint_accept_clear.state(["!disabled"] if clear else ["disabled"])
+            for widget in (self.hint_accept_clear, self.hint_accept, self.hint_unsure, self.hint_skip,
+                           self.hint_reject):
                 widget.pack(side=tk.LEFT, padx=pad)
         if kind == "points":
             self.hint_scale_check.pack(side=tk.LEFT, padx=(pad, self.px(10)))
@@ -704,6 +741,18 @@ class UIBuilderMixin:
         self.match_button.pack(side=tk.LEFT)
         self.match_note = self._note(body, "")
 
+        self._subheading(body, "Frames")
+        ttk.Label(body, textvariable=self.frames_info_var, style="Value.TLabel").pack(anchor=tk.W)
+        ttk.Label(body, textvariable=self.dark_info_var, style="Value.TLabel").pack(anchor=tk.W)
+        line = self._row(body, 4)
+        ttk.Button(line, text="Choose dark frame...", takefocus=False,
+                   command=lambda: self.choose_dark_frames(*reversed(self._adjust_target()))).pack(side=tk.LEFT)
+        ttk.Button(line, text="Clear", takefocus=False,
+                   command=lambda: self._clear_dark_frames()).pack(side=tk.LEFT, padx=self.px(6))
+        self._note(body, "To cut noise, select several identical exposures when loading an image: they "
+                         "are averaged.  A dark frame (same exposure, light off) removes hot pixels and "
+                         "stray light.")
+
         self._subheading(body, "Camera RAW development")
         self.raw_frame = ttk.Frame(body)
         self.raw_frame.pack(fill=tk.X)
@@ -827,6 +876,13 @@ class UIBuilderMixin:
                 var.set(target.nr[idx][key])
             self.nr_aggressive_var.set(target.nr[idx]["aggressive"])
             raw = is_raw(target.paths[idx])
+            recipe = target.develop[idx]
+            self.frames_info_var.set(
+                f"{len(recipe['frames']) + 1} exposures averaged: "
+                + ", ".join(os.path.basename(p) for p in [target.paths[idx]] + recipe["frames"])
+                if recipe["frames"] else "Single exposure")
+            self.dark_info_var.set("Dark frame: " + (", ".join(os.path.basename(p) for p in recipe["dark"])
+                                                     if recipe["dark"] else "none"))
             self.raw_exposure_var.set(f"{target.develop[idx]['exposure']:.1f}")
             self.raw_noise_var.set(target.develop[idx]["noise"].capitalize())
             self._set_children_state(self.raw_frame, raw)
@@ -984,7 +1040,12 @@ class UIBuilderMixin:
             exposure = max(-4.0, min(6.0, float(self.raw_exposure_var.get())))
         except ValueError:
             exposure = 0.0
-        self.pairs[row].develop[idx] = {"exposure": exposure, "noise": self.raw_noise_var.get().lower()}
+        self.pairs[row].develop[idx].update(exposure=exposure, noise=self.raw_noise_var.get().lower())
+
+    def _clear_dark_frames(self):
+        row, idx = self._adjust_target()
+        if self.pairs[row].develop[idx]["dark"]:
+            self.set_dark_frames(idx, row, [])
 
     def _redevelop_from_panel(self):
         self._on_raw_settings()

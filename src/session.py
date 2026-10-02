@@ -115,6 +115,13 @@ def fill_pair_from_session(pair, session, reference=False):
     pair.annotations = [normalise_annotation(a) for a in session.get(prefix + "annotations", [])]
     pair.colour_labels = dict(session.get(prefix + "colour_labels", {}))
     pair.label_prefixes = dict(session.get(prefix + "label_prefixes", {}))
+    pair.outline = []
+    for point in session.get(prefix + "filter_outline") or []:
+        try:
+            pair.outline.append([float(point[0]), float(point[1])])
+        except (TypeError, ValueError, IndexError):
+            pair.outline = []
+            break
 
 
 def shift_legacy_raw_markers(pair, session, base_image):
@@ -126,6 +133,34 @@ def shift_legacy_raw_markers(pair, session, base_image):
     for ann in pair.annotations:
         ann["img1_x"] -= left
         ann["img1_y"] -= top
+
+
+def develop_record(develop, session_dir):
+    """A development recipe as stored in a session: frame paths both absolute and relative."""
+    record = dict(develop)
+    for key in ("frames", "dark"):
+        record[key] = list(develop.get(key) or [])
+        record[key + "_rel"] = [relative_to(p, session_dir) for p in record[key]]
+    return record
+
+
+def resolve_frame_paths(pair, records, session_dir):
+    """Locate the extra frames and dark frames named in a session.  Returns how many are missing."""
+    missing = 0
+    for i in range(2):
+        record = records[i] if isinstance(records, list) and i < len(records) and isinstance(records[i], dict) else {}
+        for key in ("frames", "dark"):
+            saved = list(record.get(key) or [])
+            relative = list(record.get(key + "_rel") or [])
+            found = []
+            for n, path in enumerate(saved):
+                located = resolve_image_path(path, relative[n] if n < len(relative) else None, session_dir)
+                if located:
+                    found.append(located)
+                else:
+                    missing += 1
+            pair.develop[i][key] = found
+    return missing
 
 
 def _float(value, default):
@@ -157,11 +192,12 @@ class SessionMixin:
             "annotations": [normalise_annotation(a) for a in current.annotations],
             "colour_labels": dict(current.colour_labels),
             "label_prefixes": dict(current.label_prefixes),
+            "filter_outline": [list(p) for p in current.outline],
             "align_pts_img1": [],
             "align_pts_img2": [],
             "adjustments": [dict(a) for a in current.adjust],
             "noise_reduction": [dict(n) for n in current.nr],
-            "raw_develop": [dict(d) for d in current.develop],
+            "raw_develop": [develop_record(d, session_dir) for d in current.develop],
             "camera_settings": [dict(c) for c in current.camera],
             "compare_row_enabled": bool(self.show_reference_var.get() and reference.has_any_image()),
             "compare_image_paths": list(reference.paths),
@@ -175,10 +211,11 @@ class SessionMixin:
             },
             "compare_adjustments": [dict(a) for a in reference.adjust],
             "compare_noise_reduction": [dict(n) for n in reference.nr],
-            "compare_raw_develop": [dict(d) for d in reference.develop],
+            "compare_raw_develop": [develop_record(d, session_dir) for d in reference.develop],
             "compare_camera_settings": [dict(c) for c in reference.camera],
             "compare_annotations": [normalise_annotation(a) for a in reference.annotations],
             "compare_colour_labels": dict(reference.colour_labels),
+            "compare_filter_outline": [list(p) for p in reference.outline],
             "compare_label": reference.label,
             "compare_session_path_rel": relative_to(reference.session_path, session_dir),
         }
@@ -361,13 +398,16 @@ class SessionMixin:
         if final is None:
             return
 
+        session_dir = Path(path).resolve().parent
         current = ImagePair()
         fill_pair_from_session(current, session)
+        missing_frames = resolve_frame_paths(current, session.get("raw_develop"), session_dir)
         current.label = describe_location(path)
         current.session_path = path
         reference = ImagePair()
         if with_reference:
             fill_pair_from_session(reference, session, reference=True)
+            missing_frames += resolve_frame_paths(reference, session.get("compare_raw_develop"), session_dir)
             reference.label = session.get("compare_label") or ""
             rel = session.get("compare_session_path_rel")
             if rel:
@@ -419,7 +459,9 @@ class SessionMixin:
                 self._schedule_render()
             else:
                 self.fit_view()
-            self.set_status(f"Session opened: {path}")
+            self.set_status(f"Session opened: {path}" + (
+                f"  ({missing_frames} extra or dark frame(s) could not be found and were left out.)"
+                if missing_frames else ""))
 
         self._load_images(jobs, finished, title="Opening session")
 
@@ -446,6 +488,7 @@ class SessionMixin:
 
         reference = ImagePair()
         fill_pair_from_session(reference, session)
+        resolve_frame_paths(reference, session.get("raw_develop"), Path(path).resolve().parent)
         reference.label = describe_location(path)
         reference.session_path = path
         jobs = [((1, idx), image_path, reference.nr[idx], reference.develop[idx])
@@ -495,7 +538,7 @@ class SessionMixin:
             "image": kind,
             "adjust": dict(pair.adjust[idx]),
             "noise_reduction": dict(pair.nr[idx]),
-            "raw_develop": dict(pair.develop[idx]),
+            "raw_develop": {key: pair.develop[idx][key] for key in ("exposure", "noise")},
             "camera": dict(pair.camera[idx]),
             "saved_from": os.path.basename(pair.paths[idx]) if pair.paths[idx] else None,
         }
@@ -587,6 +630,10 @@ class SessionMixin:
             return records
 
         old_noise, old_develop = dict(pair.nr[idx]), dict(pair.develop[idx])
+        if isinstance(develop, dict):
+            # A preset carries the look, never which files an image is built from.
+            develop = dict(pair.develop[idx], exposure=develop.get("exposure", 0.0),
+                           noise=develop.get("noise", "standard"))
         self._checkpoint("Load image settings")
         pair.apply_adjust_records(replaced(pair.adjust, adjust))
         pair.apply_nr_records(replaced(pair.nr, noise))

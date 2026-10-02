@@ -20,6 +20,10 @@ GUIDE = [
         "- Under each panel's title is how that photograph was taken: aperture, exposure time, ISO, "
         "focal length and camera.  With a reference row loaded, a setting shown in red differs "
         "from the matching image in the other row.",
+        "- To cut noise, select several identical exposures together when loading an image (hold "
+        "Ctrl or Shift in the file window): they are averaged.  A dark frame, taken with the same "
+        "exposure and the light off, can be chosen under 'Brightness, contrast and noise' to remove "
+        "hot pixels and stray light.",
         "- Camera RAW files can be loaded as they are, with no conversion step.  A backlit RAW "
         "frame is developed for dark-field viewing: the noise floor becomes black and pinholes are "
         "brightened.  Exposure and noise reduction are under 'Brightness, contrast and noise'.",
@@ -58,17 +62,24 @@ GUIDE = [
         "to drag a marker.  Ctrl+Z undoes any change.",
     ]),
     ("5.  Let the software find pinholes", [
-        "- Choose Find pinholes (D) and drag a rectangle over the filter itself, leaving out the "
-        "holder and any glare.",
-        "- Each small bright spot without a marker is shown in turn, strongest first, in a yellow "
-        "circle.  Press Enter to accept it as a marker in the colour in use, S to skip it, or X if "
-        "it is not a pinhole.  Esc stops the review.",
+        "- First mark the filter outline, once per filter: choose Outline (T) and drag from one "
+        "corner of the membrane to the opposite corner.  Set Corner radius so the line follows the "
+        "rounded corners, and Inset to pull it just inside the edge, so glints from the frame are "
+        "left out.  The outline is saved with the session and carried to later inspections through "
+        "the reference row.",
+        "- Choose Find pinholes (D) and press Search.  Small bright spots inside the outline that "
+        "have no marker are sorted into clear, likely and faint.",
+        "- 'Accept clear' adds markers for all the clear spots in one go.  The likely ones are then "
+        "shown one at a time in a yellow circle: Enter accepts, S skips, X rejects, and Esc stops.",
         "- Not sure?  Press U: the marker is added with a question mark after its label and counted "
         "as 'unsure' in the legend.  Right-click a marker later to confirm it.",
+        "- Faint spots are mostly noise and are left out; tick 'Include faint' to step through "
+        "them as well.",
         "- With a reference row loaded and aligned, spots that are not in the earlier image come "
-        "first and are labelled as new; tick 'Only new since reference' to see just those.",
-        "- Sensitivity sets how faint a spot may be.  The search suggests; you decide.  Check each "
-        "candidate against the frontlit image, since dust and glints can also look bright.",
+        "first and are labelled as new; tick 'Only new since reference' to see just those.  The "
+        "status bar also lists existing markers that have no bright spot under them.",
+        "- The search suggests; you decide.  Check candidates against the frontlit image, since dust "
+        "and glints can also look bright.",
     ]),
     ("6.  Save the session", [
         "- Ctrl+S saves everything except the image data itself: which images, the alignment, "
@@ -120,6 +131,7 @@ SHORTCUTS = [
         ("L", "Level (make upright)"),
         ("G", "Align frontlit to backlit"),
         ("R", "Align reference row to current row"),
+        ("T", "Filter outline"),
         ("D", "Find pinholes"),
         ("C", "Crop export"),
         ("Esc", "Clear points, or return to Pan"),

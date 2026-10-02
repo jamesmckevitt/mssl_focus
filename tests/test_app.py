@@ -1,6 +1,7 @@
 """End-to-end tests that drive the real window with synthetic filter images."""
 
 import math
+import pathlib
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -386,7 +387,7 @@ def test_found_pinholes_are_reviewed_one_by_one(app, tmp_path):
     drag(app, pane(app, 0, BACKLIT), (2, 2), (canvas.winfo_width() - 2, canvas.winfo_height() - 2))
     wait_idle(app)
     assert app.tool_var.get() == "review"
-    assert len(app._candidates) == len(DOTS) - 1, "the marked spot must not be offered again"
+    assert len(app._review_candidates()) == len(DOTS) - 1, "the marked spot must not be offered again"
     assert app._candidate_summary["marked"] == 1
 
     first = dict(app._current_candidate())
@@ -398,7 +399,7 @@ def test_found_pinholes_are_reviewed_one_by_one(app, tmp_path):
     app.review_reject()
     app.review_skip()
     wait_idle(app)
-    assert len(app._candidates) == len(DOTS) - 3
+    assert len(app._review_candidates()) == len(DOTS) - 3
     app._on_escape()
     assert app.tool_var.get() == "pan" and app._candidates == []
     assert len(app.pairs[0].annotations) == 2
@@ -792,3 +793,170 @@ def test_swap_needs_a_reference_row(app, tmp_path):
     path_before = app.pairs[0].paths[BACKLIT]
     app.swap_rows()
     assert app.pairs[0].paths[BACKLIT] == path_before
+
+
+def test_several_exposures_are_averaged_and_remembered_by_the_session(app, tmp_path):
+    from tests.test_imaging import _noisy_frames
+
+    stage = tmp_path / "7_next_test" / "em9"
+    stage.mkdir(parents=True)
+    frames = _noisy_frames(stage, 3)
+    app.load_image_path(frames[0], BACKLIT, frames=frames[1:])
+    wait_idle(app)
+    pair = app.pairs[0]
+    assert pair.develop[BACKLIT]["frames"] == frames[1:]
+    assert pair.camera[BACKLIT]["frames"] == 3
+    canvas = pane(app, 0, BACKLIT).canvas
+    hud = "".join(canvas.itemcget(i, "text") for i in canvas.find_withtag("hud") if canvas.type(i) == "text")
+    assert "3 frames averaged" in hud
+    assert "3 exposures averaged" in app.frames_info_var.get()
+
+    app.set_dark_frames(BACKLIT, 0, [frames[2]])
+    wait_idle(app)
+    assert pair.develop[BACKLIT]["dark"] == [frames[2]]
+    assert "frame2.png" in app.dark_info_var.get()
+
+    session_file = stage / "session.json"
+    app._write_session(str(session_file))
+    saved = read_session(session_file)["raw_develop"][0]
+    assert saved["frames_rel"] == ["frame1.png", "frame2.png"] and saved["dark_rel"] == ["frame2.png"]
+
+    # The whole folder moves; the session still finds every frame.
+    moved = tmp_path / "moved"
+    (tmp_path / "7_next_test").rename(moved)
+    app.new_session()
+    app.open_session(str(moved / "em9" / "session.json"))
+    wait_idle(app)
+    recipe = app.pairs[0].develop[BACKLIT]
+    assert [pathlib.Path(p).name for p in recipe["frames"]] == ["frame1.png", "frame2.png"]
+    assert all(pathlib.Path(p).is_file() for p in recipe["frames"] + recipe["dark"])
+    assert app.pairs[0].camera[BACKLIT]["frames"] == 3
+    assert not app.shown_errors
+
+
+def test_a_bad_dark_frame_is_reported_and_not_kept(app, tmp_path):
+    from PIL import Image
+
+    load_stage(app, make_stage(tmp_path / "s", DOTS))
+    wrong_size = tmp_path / "wrong.png"
+    Image.new("RGB", (30, 30)).save(wrong_size)
+    app.set_dark_frames(BACKLIT, 0, [str(wrong_size)])
+    wait_idle(app)
+    assert app.shown_errors
+    assert app.pairs[0].develop[BACKLIT]["dark"] == []
+    assert app.pairs[0].has_image(BACKLIT)
+
+
+def _stage_with_edge_glints(folder, faint=()):
+    """A filter whose membrane spans (200..1000, 150..650) with rounded corners; pinholes
+    inside it, and bright glints on the frame just outside its edge and in its square corners."""
+    from PIL import ImageDraw
+
+    folder.mkdir(parents=True)
+    glints = [(196, 400), (1004, 300), (600, 146), (500, 654), (206, 156), (994, 644)]
+    image = make_filter_image(SIZE, DOTS + glints, mesh=False)
+    draw = ImageDraw.Draw(image)
+    for x, y in faint:
+        draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(34, 34, 34))
+    image.save(folder / "back.png")
+    make_filter_image(SIZE, DOTS, background=60, dot_value=200).save(folder / "front.png")
+    return folder
+
+
+def _draw_outline(app, radius="60", inset="6"):
+    app.set_tool("outline")
+    app.outline_radius_var.set(radius)
+    app.outline_inset_var.set(inset)
+    target = pane(app, 0, BACKLIT)
+    drag(app, target, app.image_to_canvas(0, BACKLIT, 200, 150), app.image_to_canvas(0, BACKLIT, 1000, 650))
+    wait_idle(app)
+
+
+def test_the_filter_outline_keeps_frame_glints_out_of_the_search(app, tmp_path):
+    stage = _stage_with_edge_glints(tmp_path / "1_incoming" / "em9", faint=[(700, 500)])
+    load_stage(app, stage)
+    _draw_outline(app)
+    outline = app.pairs[0].outline
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    assert (min(xs), max(xs)) == pytest.approx((206, 994), abs=1.5)
+    assert (min(ys), max(ys)) == pytest.approx((156, 644), abs=1.5)
+
+    app.set_tool("detect")
+    app.find_pinholes_in()
+    wait_idle(app)
+    assert app.tool_var.get() == "review"
+    found = sorted((int(c["x"]), int(c["y"])) for c in app._candidates if c["tier"] == "clear")
+    assert found == sorted(DOTS)
+    assert [c["tier"] for c in app._candidates].count("faint") == 1
+    assert len(app._review_candidates()) == len(DOTS), "faint spots are left out unless asked for"
+
+    # One press adds all the clear ones; nothing is left, so the review ends.
+    app.review_accept_clear()
+    wait_idle(app)
+    assert len(app.pairs[0].annotations) == len(DOTS)
+    assert app.tool_var.get() == "pan"
+
+    # The faint one can still be stepped through on request.
+    app.detect_faint_var.set(True)
+    app.set_tool("detect")
+    app.find_pinholes_in()
+    wait_idle(app)
+    assert [(int(c["x"]), int(c["y"]), c["tier"]) for c in app._review_candidates()] == [(700, 500, "faint")]
+    assert app._candidate_summary["marked"] == len(DOTS)
+    app._on_escape()
+
+    # Undo takes all five automatic markers away in one step.
+    app.undo()
+    assert app.pairs[0].annotations == []
+
+
+def test_outline_is_saved_and_carried_to_the_next_inspection(app, tmp_path):
+    back1 = (0.0, (0, 0))
+    stage1 = _stage_with_edge_glints(tmp_path / "1_incoming" / "em9")
+    load_stage(app, stage1)
+    _draw_outline(app)
+    app.set_tool("annotate")
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, 450, 300))   # a marker on nothing
+    app._write_session(str(stage1 / "session.json"))
+    saved_outline = read_session(stage1 / "session.json")["filter_outline"]
+    assert len(saved_outline) == len(app.pairs[0].outline) > 20
+
+    app.new_session()
+    app.open_session(str(stage1 / "session.json"))
+    wait_idle(app)
+    assert app.pairs[0].outline == saved_outline
+
+    # A later inspection, shifted in the frame, with no outline of its own.
+    shift = (40, 25)
+    stage2 = tmp_path / "2_shock" / "em9"
+    stage2.mkdir(parents=True)
+    glints = [(196, 400), (1004, 300), (600, 146), (500, 654)]
+    make_filter_image(SIZE, DOTS + glints, shift=shift, mesh=False).save(stage2 / "back.png")
+    make_filter_image(SIZE, DOTS, shift=shift, background=60, dot_value=200).save(stage2 / "front.png")
+    app.new_session()
+    load_stage(app, stage2)
+    app.open_reference_session(str(stage1 / "session.json"))
+    wait_idle(app)
+    app.set_tool("align_rows")
+    for dot in DOTS[:3]:
+        click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, dot[0] + shift[0], dot[1] + shift[1]))
+        click(app, pane(app, 1, BACKLIT), *app.image_to_canvas(1, BACKLIT, *dot))
+    app.apply_tool_points()
+    wait_idle(app)
+
+    carried = app.effective_outline()
+    assert app.pairs[0].outline == [] and len(carried) == len(saved_outline)
+    assert carried[0] == pytest.approx((saved_outline[0][0] + shift[0], saved_outline[0][1] + shift[1]), abs=1.0)
+
+    app.set_tool("detect")
+    app.find_pinholes_in()
+    wait_idle(app)
+    assert len(app._candidates) == len(DOTS), "the glints on the frame are outside the carried outline"
+
+    app._on_escape()
+    app.copy_reference_annotations()
+    assert len(app.pairs[0].outline) == len(saved_outline), "copying the markers brings the outline too"
+    app.set_tool("detect")
+    app.find_pinholes_in()
+    wait_idle(app)
+    assert app._candidate_summary["lonely"] == ["P1"], "the copied marker with nothing under it is reported"

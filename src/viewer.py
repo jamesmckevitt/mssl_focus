@@ -413,18 +413,21 @@ class ViewerMixin:
     # ------------------------------------------------------------------ #
 
     def load_image(self, idx, row=CURRENT):
-        path = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             parent=self.root,
-            title=f"Open {self._image_label(idx, row).lower()}",
+            title=f"Open {self._image_label(idx, row).lower()}  (select several exposures to average them)",
             initialdir=self._dialog_dir(),
             filetypes=IMAGE_FILETYPES,
         )
-        if path:
-            self._remember_dir(path)
-            self.load_image_path(path, idx, row)
+        paths = sorted(self.root.tk.splitlist(paths)) if paths else []
+        if paths:
+            self._remember_dir(paths[0])
+            self.load_image_path(paths[0], idx, row, frames=paths[1:])
 
-    def load_image_path(self, path, idx, row=CURRENT):
+    def load_image_path(self, path, idx, row=CURRENT, frames=()):
+        """Load an image; ``frames`` are further exposures of the same scene to average with it."""
         was_empty = not any(pair.has_any_image() for pair in self.pairs)
+        develop = dict(self.pairs[row].develop[idx], frames=list(frames), dark=[])
 
         def finished(loaded, errors):
             self._report_load_errors("Load image", errors)
@@ -432,6 +435,7 @@ class ViewerMixin:
                 return
             loaded_path, base, pyramid = loaded[(row, idx)]
             pair = self.pairs[row]
+            pair.develop[idx] = develop
             pair.set_image(idx, loaded_path, base, pyramid)
             pair.nr[idx]["amount"] = 0
             if not pair.label:
@@ -446,30 +450,56 @@ class ViewerMixin:
             self._schedule_render()
             self.set_status(
                 f"{self._image_label(idx, row)} loaded: {os.path.basename(loaded_path)} "
-                f"({pyramid.size[0]} x {pyramid.size[1]} px)")
+                + (f"and {len(frames)} more, averaged " if frames else "")
+                + f"({pyramid.size[0]} x {pyramid.size[1]} px)")
 
-        self._load_images([((row, idx), path, None, self.pairs[row].develop[idx])], finished)
+        self._load_images([((row, idx), path, None, develop)], finished)
 
-    def redevelop_image(self, idx, row=CURRENT):
-        """Develop a RAW image again with the current exposure and noise settings."""
+    def choose_dark_frames(self, idx, row=CURRENT):
+        """Pick frame(s) taken with the light off; their hot pixels and stray light are removed."""
+        pair = self.pairs[row]
+        if not pair.has_image(idx):
+            self.set_status("Load the image first, then choose its dark frame.")
+            return
+        paths = filedialog.askopenfilenames(
+            parent=self.root, title="Choose dark frame(s): same exposure, light off",
+            initialdir=os.path.dirname(pair.paths[idx]), filetypes=IMAGE_FILETYPES)
+        paths = sorted(self.root.tk.splitlist(paths)) if paths else []
+        if paths:
+            self.set_dark_frames(idx, row, paths)
+
+    def set_dark_frames(self, idx, row, paths):
+        previous = list(self.pairs[row].develop[idx]["dark"])
+        self.pairs[row].develop[idx]["dark"] = list(paths)
+        self.redevelop_image(idx, row, on_failure=lambda: self.pairs[row].develop[idx].update(dark=previous))
+
+    def redevelop_image(self, idx, row=CURRENT, on_failure=None):
+        """Build an image again from its file(s) with the current development settings."""
         pair = self.pairs[row]
         path = pair.paths[idx]
         label = self._image_label(idx, row)
-        if not is_raw(path):
-            self.set_status(f"{label} is not a camera RAW file.")
+        if not path:
             return
 
         def finished(loaded, errors):
-            self._report_load_errors("Develop RAW", errors)
+            self._report_load_errors("Develop image", errors)
+            if errors and on_failure is not None:
+                on_failure()
+                self._sync_controls()
             if (row, idx) not in loaded or pair.paths[idx] != path:
                 return
             _path, base, pyramid = loaded[(row, idx)]
             pair.set_image(idx, path, base, pyramid)
             self._mark_dirty()
+            self._sync_controls()
             self._schedule_render()
             settings = pair.develop[idx]
-            self.set_status(f"{label} developed again: exposure {settings['exposure']:+.1f} EV, "
-                            f"noise reduction {settings['noise']}.")
+            extras = ((f", {len(settings['frames']) + 1} frames averaged" if settings["frames"] else "")
+                      + (", dark frame removed" if settings["dark"] else ""))
+            self.set_status(
+                f"{label} developed again"
+                + (f": exposure {settings['exposure']:+.1f} EV, noise reduction {settings['noise']}"
+                   if is_raw(path) else "") + extras + ".")
 
         self._load_images([((row, idx), path, pair.nr[idx], pair.develop[idx])], finished,
                           title="Developing RAW")

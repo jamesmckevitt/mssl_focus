@@ -96,6 +96,10 @@ def camera_parts(info, with_equipment=True):
             parts.append(("focal_length", f"{info['focal_length']:g} mm"))
         if "model" in info:
             parts.append(("model", info["model"]))
+        if info.get("frames", 1) > 1:
+            parts.append(("frames", f"{info['frames']} frames averaged"))
+        if info.get("dark_frames"):
+            parts.append(("dark_frames", "dark frame removed"))
     return parts
 
 

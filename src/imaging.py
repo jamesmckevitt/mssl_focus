@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from . import geometry as geo
-from .camera import RAW_EXTENSIONS, read_camera_info
+from .camera import RAW_EXTENSIONS, describe_camera, mismatched_settings, read_camera_info
 
 # Inspection images are large on purpose.
 Image.MAX_IMAGE_PIXELS = None
@@ -33,7 +33,17 @@ def is_raw(path):
 # Camera RAW development
 # --------------------------------------------------------------------------- #
 
-RAW_DEVELOP_DEFAULTS = {"exposure": 0.0, "noise": "standard"}
+def default_develop():
+    """How an image is built from its file(s).
+
+    ``exposure`` and ``noise`` apply to camera RAW files.  ``frames`` lists further
+    exposures of the same scene to average with the main file, and ``dark`` lists
+    frames taken with the light off, whose hot pixels and stray light are removed.
+    """
+    return {"exposure": 0.0, "noise": "standard", "frames": [], "dark": []}
+
+
+RAW_DEVELOP_DEFAULTS = default_develop()   # read-only reference copy
 
 # name: (colour-noise blur sigma, brightness-noise blur sigma, black point in noise sigmas)
 RAW_NOISE_LEVELS = {
@@ -58,23 +68,10 @@ def _srgb_curve(linear):
     return out
 
 
-def develop_raw(path, dark_field=False, exposure=0.0, noise="standard"):
-    """Develop a camera RAW file into an 8-bit RGB image.
-
-    The frame is cropped to the camera's own image area, so it matches the
-    pixel grid of files converted with the manufacturer's software.
-
-    ``dark_field`` asks for the treatment suited to backlit frames, where a
-    few bright points sit on an otherwise black, noisy background: the black
-    point is set just above the measured noise floor and the remaining range
-    is stretched so those points are clearly visible.  It only takes effect
-    if the frame really is dark.  ``exposure`` is an extra brightening in
-    stops on top of that.
-    """
-    import cv2
+def _linear_raw(path):
+    """A RAW file as linear RGB in 0..1, cropped to the camera's image area."""
     import rawpy
 
-    chroma_sigma, luma_sigma, black_sigmas = RAW_NOISE_LEVELS.get(noise, RAW_NOISE_LEVELS["standard"])
     with rawpy.imread(path) as raw:
         linear = raw.postprocess(use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1))
         sizes = raw.sizes
@@ -87,9 +84,88 @@ def develop_raw(path, dark_field=False, exposure=0.0, noise="standard"):
     if flip == 0 and 0 < crop_w and 0 < crop_h and left + crop_w <= linear.shape[1] and top + crop_h <= linear.shape[0]:
         linear = linear[top:top + crop_h, left:left + crop_w]
         margins = (left, top)
-
     linear = linear.astype(np.float32)
     linear /= 65535.0
+    return linear, margins
+
+
+def check_same_exposure(paths):
+    """Averaging only makes sense for frames taken with identical settings."""
+    first = read_camera_info(paths[0])
+    for path in paths[1:]:
+        info = read_camera_info(path)
+        if mismatched_settings(first, info) & {"f_number", "exposure_time", "iso"}:
+            raise ValueError(
+                "frames can only be averaged if they were taken with the same settings, but "
+                f"{os.path.basename(paths[0])} is {describe_camera(first, False)} and "
+                f"{os.path.basename(path)} is {describe_camera(info, False)}")
+
+
+def _average(paths, load):
+    total = None
+    for path in paths:
+        frame = load(path)
+        if total is None:
+            total = frame
+        elif frame.shape != total.shape:
+            raise ValueError(f"{os.path.basename(path)} is not the same size as {os.path.basename(paths[0])}")
+        else:
+            total += frame
+    if len(paths) > 1:
+        total /= len(paths)
+    return total
+
+
+def _fixed_pattern(dark):
+    """What a light-off frame shows that is not random noise: hot pixels and stray light.
+
+    Only pixels standing clearly above the dark frame's own noise are kept, so
+    removing the result does not add that noise to the picture.
+    """
+    luma = dark.mean(axis=2) if dark.ndim == 3 else dark
+    sample = luma[::3, ::3]
+    median = float(np.median(sample))
+    sigma = max(float(np.median(np.abs(sample - median)) * 1.4826), 1e-6)
+    excess = dark - median
+    excess[luma <= median + 5.0 * sigma] = 0.0
+    return np.clip(excess, 0.0, None, out=excess)
+
+
+def develop_raw(path, dark_field=False, exposure=0.0, noise="standard", frames=(), dark=()):
+    """Develop a camera RAW file into an 8-bit RGB image.
+
+    ``frames`` are further exposures to average with it (less noise), and ``dark``
+    are light-off frames whose hot pixels and stray light are removed.
+
+    The frame is cropped to the camera's own image area, so it matches the
+    pixel grid of files converted with the manufacturer's software.
+
+    ``dark_field`` asks for the treatment suited to backlit frames, where a
+    few bright points sit on an otherwise black, noisy background: the black
+    point is set just above the measured noise floor and the remaining range
+    is stretched so those points are clearly visible.  It only takes effect
+    if the frame really is dark.  ``exposure`` is an extra brightening in
+    stops on top of that.
+    """
+    import cv2
+
+    chroma_sigma, luma_sigma, black_sigmas = RAW_NOISE_LEVELS.get(noise, RAW_NOISE_LEVELS["standard"])
+    paths = [path] + list(frames)
+    if len(paths) > 1:
+        check_same_exposure(paths)
+    seen_margins = []
+
+    def load(frame_path):
+        frame, frame_margins = _linear_raw(frame_path)
+        seen_margins.append(frame_margins)
+        return frame
+
+    linear = _average(paths, load)
+    margins = seen_margins[0]
+    if dark:
+        linear -= _fixed_pattern(_average(list(dark), load))
+        np.clip(linear, 0.0, None, out=linear)
+
     luma = linear @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
     sample = luma[::3, ::3]
     median = float(np.median(sample))
@@ -139,18 +215,36 @@ def open_image(path, develop=None, dark_field=False):
     it is ignored for ordinary image files.  The camera's exposure settings, where
     the file records them, are returned in ``image.info["camera"]``.
     """
-    image = _open_pixels(path, develop, dark_field)
-    image.info["camera"] = read_camera_info(path)
+    settings = default_develop()
+    settings.update(develop or {})
+    frames = [p for p in settings.get("frames") or [] if p]
+    dark = [p for p in settings.get("dark") or [] if p]
+    if is_raw(path):
+        image = develop_raw(path, dark_field=dark_field, exposure=settings["exposure"],
+                            noise=settings["noise"], frames=frames, dark=dark)
+    elif frames or dark:
+        if frames:
+            check_same_exposure([path] + frames)
+
+        def load(frame_path):
+            return np.asarray(_open_single(frame_path).convert("RGB"), dtype=np.float32).copy()
+
+        pixels = _average([path] + frames, load)
+        if dark:
+            pixels -= _fixed_pattern(_average(dark, load))
+        image = Image.fromarray(np.clip(pixels + 0.5, 0, 255).astype(np.uint8))
+    else:
+        image = _open_single(path)
+    camera = read_camera_info(path)
+    if frames:
+        camera["frames"] = len(frames) + 1
+    if dark:
+        camera["dark_frames"] = len(dark)
+    image.info["camera"] = camera
     return image
 
 
-def _open_pixels(path, develop, dark_field):
-    if is_raw(path):
-        settings = dict(RAW_DEVELOP_DEFAULTS)
-        settings.update(develop or {})
-        return develop_raw(path, dark_field=dark_field, exposure=settings["exposure"],
-                           noise=settings["noise"])
-
+def _open_single(path):
     with Image.open(path) as handle:
         handle.load()
         img = handle.copy()

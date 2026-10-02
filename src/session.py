@@ -1,1452 +1,703 @@
+"""Session files: reading, writing, locating images, and the session commands."""
+
 import json
-import math
+import os
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
-import numpy as np
-from PIL import Image
+from . import geometry as geo
+from . import theme
+from .camera import camera_differences, describe_camera, exposure_stops
+from .imaging import IMAGE_FILETYPES, is_raw
+from .metadata import APP_VERSION
+from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
 
-from .constants import BACKLIT_IMAGE_LABEL, FRONTLIT_IMAGE_LABEL
-from .viewer import _open_image
+SESSION_FILETYPES = [("Session file", "*.json"), ("All files", "*.*")]
+SESSION_VERSION = 3      # 3: a session holds one inspection (one row); earlier ones could hold two
+RAW_CROP_VERSION = 2     # before this, markers were placed on the uncropped RAW frame
+CURRENT, REFERENCE = 0, 1
+SETTINGS_FILE_TYPE = "mssl_focus_image_settings"
+SETTINGS_FILETYPES = [("Image settings or session", "*.json"), ("All files", "*.*")]
 
+
+# --------------------------------------------------------------------------- #
+# Pure helpers
+# --------------------------------------------------------------------------- #
+
+def read_session(path):
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError("this is not a MSSL FOCUS session file")
+    return data
+
+
+def write_session(path, data):
+    """Write atomically so a crash or sync conflict cannot leave half a file."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    os.replace(tmp, path)
+
+
+def describe_location(path):
+    """Short human label from a file's folders, e.g. ``5_thermal_test / em2``."""
+    if not path:
+        return ""
+    parent = Path(path).resolve().parent
+    if parent.parent.name:
+        return f"{parent.parent.name} / {parent.name}"
+    return parent.name
+
+
+def relative_to(path, base_dir):
+    if not path:
+        return None
+    try:
+        return os.path.relpath(path, base_dir).replace("\\", "/")
+    except ValueError:  # different drive on Windows
+        return None
+
+
+def resolve_image_path(saved, relative, session_dir):
+    """Find an image named in a session file, even after folders were moved or renamed."""
+    session_dir = Path(session_dir)
+    candidates = []
+    if relative:
+        candidates.append(session_dir / relative)
+    if saved:
+        candidates.append(Path(saved))
+        parts = Path(str(saved).replace("\\", "/")).parts
+        # Same file name beside the session, then progressively more of the old folder tail.
+        for depth in range(1, min(4, len(parts)) + 1):
+            base = session_dir
+            for _ in range(depth - 1):
+                base = base.parent
+            candidates.append(base.joinpath(*parts[-depth:]))
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def _pair_of(values):
+    values = list(values or [])[:2]
+    while len(values) < 2:
+        values.append(None)
+    return values
+
+
+def session_image_paths(session, session_path, reference=False):
+    """Return ``(resolved, saved)`` image path pairs for a session's main or reference row."""
+    key = "compare_image_paths" if reference else "image_paths"
+    saved = _pair_of(session.get(key))
+    relative = _pair_of(session.get(key + "_rel"))
+    session_dir = Path(session_path).resolve().parent
+    resolved = [resolve_image_path(s, r, session_dir) if (s or r) else None
+                for s, r in zip(saved, relative)]
+    saved = [s or r for s, r in zip(saved, relative)]
+    return resolved, saved
+
+
+def session_has_reference(session):
+    """Whether a session from an earlier version also holds a second (reference) row."""
+    return bool(session.get("compare_row_enabled")) or any(_pair_of(session.get("compare_image_paths")))
+
+
+def describe_saved_reference(session):
+    """What the second row of an earlier, two-row session was, for telling the user."""
+    label = session.get("compare_label") or ""
+    names = [Path(str(p).replace("\\", "/")).name for p in _pair_of(session.get("compare_image_paths")) if p]
+    files = ", ".join(names)
+    return f"{label} ({files})" if label and files else label or files or "unnamed"
+
+
+def alignment_key(other_session_path, session_dir):
+    """How a session refers to another session it has been lined up with."""
+    return relative_to(other_session_path, session_dir) or str(other_session_path)
+
+
+def row_alignments_from_session(session):
+    """How this session's row lines up with other sessions shown as its reference row:
+    ``{key of the other session: record}``.  A two-row session from an earlier version
+    stored one such alignment with its reference row; that one is kept too."""
+    found = {}
+    stored = session.get("row_alignments")
+    if isinstance(stored, dict):
+        found.update({str(key): dict(value) for key, value in stored.items() if isinstance(value, dict)})
+    other = session.get("compare_session_path_rel")
+    transform = session.get("compare_row_transform")
+    if other and isinstance(transform, dict) and other not in found and session_has_reference(session):
+        found[str(other)] = {
+            "off_x": _float(transform.get("off_x"), 0.0),
+            "off_y": _float(transform.get("off_y"), 0.0),
+            "rot": _float(transform.get("rot"), 0.0),
+            "scale": _float(transform.get("scale"), 1.0),
+            "current_rotation": _float((session.get("alignment") or {}).get("glob_rot"), 0.0),
+            "reference_rotation": _float((session.get("compare_alignment") or {}).get("glob_rot"), 0.0),
+        }
+    return found
+
+
+def row_matrix_from_record(record, current, reference):
+    """The matrix taking ``reference``'s pair space to ``current``'s, from a saved
+    alignment record, allowing for either row having been levelled differently since."""
+    centre_c, centre_r = current.centre(BACKLIT), reference.centre(BACKLIT)
+    saved = geo.translation(_float(record.get("off_x"), 0.0), _float(record.get("off_y"), 0.0)) @ geo.about(
+        centre_r, max(0.01, _float(record.get("scale"), 1.0)), _float(record.get("rot"), 0.0))
+    turned_c = current.glob_rot - _float(record.get("current_rotation"), current.glob_rot)
+    turned_r = reference.glob_rot - _float(record.get("reference_rotation"), reference.glob_rot)
+    return geo.about(centre_c, 1.0, turned_c) @ saved @ geo.about(centre_r, 1.0, -turned_r)
+
+
+def fill_pair_from_session(pair, session, reference=False):
+    """Copy a session's alignment, tone, noise and annotation records into ``pair``."""
+    prefix = "compare_" if reference else ""
+    pair.apply_alignment_record(session.get(prefix + "alignment"))
+    pair.apply_adjust_records(session.get(prefix + "adjustments"))
+    pair.apply_nr_records(session.get(prefix + "noise_reduction"))
+    pair.apply_develop_records(session.get(prefix + "raw_develop"))
+    pair.annotations = [normalise_annotation(a) for a in session.get(prefix + "annotations", [])]
+    pair.colour_labels = dict(session.get(prefix + "colour_labels", {}))
+    pair.label_prefixes = dict(session.get(prefix + "label_prefixes", {}))
+    pair.outline = []
+    for point in session.get(prefix + "filter_outline") or []:
+        try:
+            pair.outline.append([float(point[0]), float(point[1])])
+        except (TypeError, ValueError, IndexError):
+            pair.outline = []
+            break
+
+
+def shift_legacy_raw_markers(pair, session, base_image):
+    """Sessions from v1.x placed markers on the uncropped RAW frame; RAW files are now
+    cropped to the camera's image area, so move those markers by the crop margin."""
+    if int(_float(session.get("version"), 1)) >= RAW_CROP_VERSION or not is_raw(pair.paths[BACKLIT]):
+        return
+    left, top = getattr(base_image, "info", {}).get("raw_crop_margins", (0, 0))
+    for ann in pair.annotations:
+        ann["img1_x"] -= left
+        ann["img1_y"] -= top
+
+
+def develop_record(develop, session_dir):
+    """A development recipe as stored in a session: frame paths both absolute and relative."""
+    record = dict(develop)
+    for key in ("frames", "dark"):
+        record[key] = list(develop.get(key) or [])
+        record[key + "_rel"] = [relative_to(p, session_dir) for p in record[key]]
+    return record
+
+
+def resolve_frame_paths(pair, records, session_dir):
+    """Locate the extra frames and dark frames named in a session.  Returns how many are missing."""
+    missing = 0
+    for i in range(2):
+        record = records[i] if isinstance(records, list) and i < len(records) and isinstance(records[i], dict) else {}
+        for key in ("frames", "dark"):
+            saved = list(record.get(key) or [])
+            relative = list(record.get(key + "_rel") or [])
+            found = []
+            for n, path in enumerate(saved):
+                located = resolve_image_path(path, relative[n] if n < len(relative) else None, session_dir)
+                if located:
+                    found.append(located)
+                else:
+                    missing += 1
+            pair.develop[i][key] = found
+    return missing
+
+
+def _float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# --------------------------------------------------------------------------- #
+# Session commands
+# --------------------------------------------------------------------------- #
 
 class SessionMixin:
-    def _normalize_annotation_record(self, ann):
-        normalized = dict(ann)
-        normalized.pop("img2_x", None)
-        normalized.pop("img2_y", None)
-        normalized["img1_x"] = float(ann.get("img1_x", ann.get("img2_x", 0.0)))
-        normalized["img1_y"] = float(ann.get("img1_y", ann.get("img2_y", 0.0)))
-        normalized["radius"] = float(ann.get("radius", 20.0))
-        normalized["colour"] = ann.get("colour", "#ff0000")
-        normalized["label"] = ann.get("label", "")
-        return normalized
-
-    def _reset_session_state(self):
-        if getattr(self, "_annotation_import", None) is not None:
-            self._cancel_annotation_import()
-        self._close_noise_reduction_progress()
-
-        self.images = [None, None]
-        self.image_paths = [None, None]
-        self.preview_images = [None, None]
-        self.preview_scales = [1.0, 1.0]
-        self.photos = [None, None]
-        self.compare_row_images = [None, None]
-        self.compare_row_image_paths = [None, None]
-        self.compare_row_preview_images = [None, None]
-        self.compare_row_preview_scales = [1.0, 1.0]
-        self.compare_row_photos = [None, None]
-        self._base_images = [None, None]
-        self._compare_row_base_images = [None, None]
-        self._rotated_cache = [None, None]
-        self._last_rot = [None, None]
-        self._rotated_preview_cache = [None, None]
-        self._last_rot_preview = [None, None]
-        self._compare_row_rotated_cache = [None, None]
-        self._compare_row_last_rot = [None, None]
-        self._compare_row_rotated_preview_cache = [None, None]
-        self._compare_row_last_rot_preview = [None, None]
-
-        self.zoom = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self.cursor_pos = (0, 0)
-        self.last_pan = (0, 0)
-        self._interacting = False
-
-        self.annotations = []
-        self.annot_colour = "#ff0000"
-        self.colour_labels = {}
-        if getattr(self, "annot_colour_btn", None) is not None:
-            try:
-                self.annot_colour_btn.config(bg=self.annot_colour)
-            except Exception:
-                pass
-
-        self._level_start = None
-        self._crop_corner1 = None
-        self._drag_annotation_index = None
-        self._align_guide_cursor = None
-        self._compare_row_align_guide_cursor = None
-        self._clear_align_pts()
-        self._clear_compare_row_align_pts()
-        self._clear_row_align_pts()
-
-        self.mode_var.set("sidebyside")
-        self.opacity_var.set(0.5)
-        self.off_x_var.set("0")
-        self.off_y_var.set("0")
-        self.rot_var.set("0.0")
-        self.img2_scale_var.set("1.000")
-        self.glob_rot_var.set("0.0")
-        self.show_compare_row_var.set(False)
-        self.compare_row_off_x_var.set("0")
-        self.compare_row_off_y_var.set("0")
-        self.compare_row_rot_var.set("0.0")
-        self.compare_row_img2_scale_var.set("1.000")
-        self.compare_row_glob_rot_var.set("0.0")
-        self.compare_row_shift_x_var.set("0")
-        self.compare_row_shift_y_var.set("0")
-        self.compare_row_shift_rot_var.set("0.0")
-        self.compare_row_shift_scale_var.set("1.000")
-
-        self.level_mode_var.set(False)
-        self.annot_mode_var.set(False)
-        self.annot_radius_var.set(20)
-        self.annot_label_var.set(False)
-        self.move_annot_mode_var.set(False)
-        self.align_mode_var.set(False)
-        self.align_scale_mode_var.set(False)
-        self.compare_row_align_mode_var.set(False)
-        self.compare_row_align_scale_mode_var.set(False)
-        self.row_align_mode_var.set(False)
-        self.row_align_scale_mode_var.set(False)
-        self.crop_mode_var.set(False)
-        self.crop_pad_var.set(20)
-        self.annot_label_size_var.set(16)
-        self.canvas_legend_size_var.set(13)
-        self.annot_width_var.set(2.0)
-
-        for img_idx in range(2):
-            self.nr_amount_vars[img_idx].set(0)
-            self.nr_aggressive_vars[img_idx].set(False)
-            self.nr_color_vars[img_idx].set(50)
-            self.nr_edge_vars[img_idx].set(100)
-            self.adj_vars[img_idx]["brightness"].set(1.0)
-            self.adj_vars[img_idx]["contrast"].set(1.0)
-            self.adj_vars[img_idx]["blacks"].set(0.0)
-            self.adj_vars[img_idx]["whites"].set(255.0)
-            self.compare_row_nr_amount_vars[img_idx].set(0)
-            self.compare_row_nr_aggressive_vars[img_idx].set(False)
-            self.compare_row_nr_color_vars[img_idx].set(50)
-            self.compare_row_nr_edge_vars[img_idx].set(100)
-            self.compare_row_adj_vars[img_idx]["brightness"].set(1.0)
-            self.compare_row_adj_vars[img_idx]["contrast"].set(1.0)
-            self.compare_row_adj_vars[img_idx]["blacks"].set(0.0)
-            self.compare_row_adj_vars[img_idx]["whites"].set(255.0)
-
-        self.canvas1.delete("level_line")
-        self.canvas2.delete("level_line")
-        self.canvas1.delete("crop_preview")
-        self.canvas2.delete("crop_preview")
-        self.canvas1.delete("annotations")
-        self.canvas2.delete("annotations")
-        self.canvas1.delete("legend")
-        self.canvas2.delete("legend")
-        self.canvas3.delete("compare_align_pts")
-        self.canvas4.delete("compare_align_pts")
-        self.canvas4.delete("compare_align_guide")
-        self.canvas1.delete("row_align_pts")
-        self.canvas3.delete("row_align_pts")
-        self.canvas3.delete("img")
-        self.canvas4.delete("img")
-
-        self._on_mode_change()
-        self._on_compare_row_toggle()
-        self._on_crop_mode_change()
-        self._on_annot_mode_change()
-        self._on_move_annot_mode_change()
-        self._on_level_mode_change()
-        self._schedule_render()
-        self.status_var.set(f"New session started. Load {BACKLIT_IMAGE_LABEL.lower()} and {FRONTLIT_IMAGE_LABEL.lower()} to begin.")
-
-    def _apply_adjustments_from_session(self, session, target_adj_vars=None):
-        if target_adj_vars is None:
-            target_adj_vars = self.adj_vars
-        for i, d in enumerate(session.get("adjustments", [{}, {}])[:2]):
-            for key in ("brightness", "contrast", "blacks", "whites"):
-                if key in d:
-                    target_adj_vars[i][key].set(float(d[key]))
-
-    def _open_session_file(self, title, error_title):
-        path = filedialog.askopenfilename(
-            title=title,
-            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
-        )
-        if not path:
-            return None, None
-        try:
-            with open(path, encoding="utf-8") as f:
-                session = json.load(f)
-        except Exception as exc:
-            messagebox.showerror(
-                error_title,
-                f"Could not read session file:\n{exc}",
-                parent=self.root,
-            )
-            return None, None
-        return path, session
-
-    def _prompt_for_session_row_paths(self, title, heading, saved_paths, labels):
-        paths = list(saved_paths[:2])
-        while len(paths) < 2:
-            paths.append(None)
-
-        dlg = tk.Toplevel(self.root)
-        dlg.title(title)
-        dlg.configure(bg="#2b2b2b")
-        dlg.resizable(True, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        path_vars = [tk.StringVar(value=p or "") for p in paths[:2]]
-        tk.Label(
-            dlg,
-            text=heading,
-            bg="#2b2b2b",
-            fg="#ccc",
-            font=("TkDefaultFont", 9, "bold"),
-        ).pack(padx=12, pady=(10, 4), anchor=tk.W)
-
-        for pv, label in zip(path_vars, labels):
-            row = tk.Frame(dlg, bg="#2b2b2b")
-            row.pack(fill=tk.X, padx=10, pady=3)
-            tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa", width=23, anchor=tk.W).pack(side=tk.LEFT)
-            tk.Entry(
-                row,
-                textvariable=pv,
-                bg="#444",
-                fg="white",
-                insertbackground="white",
-                relief=tk.FLAT,
-                width=60,
-            ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-
-            def browse(var=pv):
-                selected = filedialog.askopenfilename(
-                    filetypes=[
-                        ("Image files",
-                         "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
-                         "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
-                         "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
-                         "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
-                        ("All files", "*.*"),
-                    ]
-                )
-                if selected:
-                    var.set(selected)
-
-            tk.Button(
-                row,
-                text="Browse...",
-                command=browse,
-                bg="#555",
-                fg="white",
-                relief=tk.FLAT,
-                padx=6,
-                pady=2,
-                cursor="hand2",
-            ).pack(side=tk.LEFT, padx=4)
-
-        confirmed = [False]
-
-        def on_ok():
-            confirmed[0] = True
-            dlg.destroy()
-
-        btn_row = tk.Frame(dlg, bg="#2b2b2b")
-        btn_row.pack(pady=10)
-        tk.Button(
-            btn_row,
-            text="Load",
-            command=on_ok,
-            bg="#336633",
-            fg="white",
-            relief=tk.FLAT,
-            padx=12,
-            pady=4,
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=6)
-        tk.Button(
-            btn_row,
-            text="Cancel",
-            command=dlg.destroy,
-            bg="#555",
-            fg="white",
-            relief=tk.FLAT,
-            padx=12,
-            pady=4,
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=6)
-
-        self.root.wait_window(dlg)
-        if not confirmed[0]:
-            return None
-        return [pv.get().strip() or None for pv in path_vars]
-
-    def _clear_loaded_row_images(self, row="top"):
-        state = self._get_image_state(row)
-        state["images"][:] = [None, None]
-        state["image_paths"][:] = [None, None]
-        state["preview_images"][:] = [None, None]
-        state["preview_scales"][:] = [1.0, 1.0]
-        state["photos"][:] = [None, None]
-        state["base_images"][:] = [None, None]
-        state["rotated_cache"][:] = [None, None]
-        state["last_rot"][:] = [None, None]
-        state["rotated_preview_cache"][:] = [None, None]
-        state["last_rot_preview"][:] = [None, None]
-
-    def _load_images_into_row(self, image_paths, row="top", error_title="Load session"):
-        self._clear_loaded_row_images(row)
-        state = self._get_image_state(row)
-        final_paths = list(image_paths[:2])
-        while len(final_paths) < 2:
-            final_paths.append(None)
-        for i, loaded_path in enumerate(final_paths):
-            if not loaded_path:
-                continue
-            try:
-                img = _open_image(loaded_path)
-                if img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
-                state["images"][i] = img
-                state["base_images"][i] = img
-                state["image_paths"][i] = loaded_path
-                state["preview_images"][i], state["preview_scales"][i] = self._make_preview(img)
-            except Exception as exc:
-                messagebox.showerror(
-                    error_title,
-                    f"Could not load {self._image_label(i, row)}:\n{loaded_path}\n\n{exc}",
-                    parent=self.root,
-                )
-                return False
-        return True
-
-    def _reset_compare_row_transform(self):
-        self.compare_row_shift_x_var.set("0")
-        self.compare_row_shift_y_var.set("0")
-        self.compare_row_shift_rot_var.set("0.0")
-        self.compare_row_shift_scale_var.set("1.000")
-        self._clear_row_align_pts()
-
-    def _load_top_row_from_session(self):
-        path, session = self._open_session_file("Load top row from session", "Load top row from session")
-        if not path:
-            return
-
-        final_paths = self._prompt_for_session_row_paths(
-            "Load Top Row From Session",
-            "Top-row image files to load  (edit or Browse to choose different files):",
-            list(session.get("image_paths", [None, None])),
-            [f"{BACKLIT_IMAGE_LABEL}:", f"{FRONTLIT_IMAGE_LABEL}:"]
-        )
-        if final_paths is None:
-            return
-        if not self._load_images_into_row(final_paths, row="top", error_title="Load top row from session"):
-            return
-
-        alignment = session.get("alignment", {})
-        self.off_x_var.set(str(alignment.get("off_x", "0")))
-        self.off_y_var.set(str(alignment.get("off_y", "0")))
-        self.rot_var.set(str(alignment.get("rot", "0.0")))
-        self.img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
-        self.glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
-
-        if "mode" in session:
-            self.mode_var.set(session["mode"])
-            self._on_mode_change()
-        if "opacity" in session:
-            self.opacity_var.set(float(session["opacity"]))
-        if "zoom" in session:
-            self.zoom = float(session["zoom"])
-        if "pan_x" in session:
-            self.pan_x = float(session["pan_x"])
-        if "pan_y" in session:
-            self.pan_y = float(session["pan_y"])
-        self.annotations = [self._normalize_annotation_record(ann) for ann in session.get("annotations", [])]
-        self.colour_labels = dict(session.get("colour_labels", {}))
-        self._align_pts_img1 = [tuple(p) for p in session.get("align_pts_img1", [])]
-        self._align_pts_img2 = [tuple(p) for p in session.get("align_pts_img2", [])]
-        self._apply_adjustments_from_session(session)
-
-        def finish_load(applied_nr):
-            self._schedule_render()
-            if applied_nr:
-                self.status_var.set(f"Loaded top row from session {path} and applied saved image settings.")
-            else:
-                self.status_var.set(f"Loaded top row from session {path}.")
-
-        self._apply_saved_noise_reduction_from_session(self, session, row="top", on_complete=finish_load)
-
-    def _load_compare_row_from_session(self):
-        path, session = self._open_session_file("Load bottom row from session", "Load bottom row from session")
-        if not path:
-            return
-        saved_paths = list(session.get("compare_image_paths") or session.get("image_paths", [None, None]))
-        final_paths = self._prompt_for_session_row_paths(
-            "Load Bottom Row From Session",
-            "Bottom-row image files to load  (edit or Browse to choose different files):",
-            saved_paths,
-            [f"{BACKLIT_IMAGE_LABEL}:", f"{FRONTLIT_IMAGE_LABEL}:"]
-        )
-        if final_paths is None:
-            return
-        if not self._load_images_into_row(final_paths, row="compare", error_title="Load bottom row from session"):
-            return
-
-        alignment = session.get("compare_alignment") or session.get("alignment", {})
-        self.compare_row_off_x_var.set(str(alignment.get("off_x", "0")))
-        self.compare_row_off_y_var.set(str(alignment.get("off_y", "0")))
-        self.compare_row_rot_var.set(str(alignment.get("rot", "0.0")))
-        self.compare_row_img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
-        self.compare_row_glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
-        self._reset_compare_row_transform()
-
-        compare_adjustments = {"adjustments": session.get("compare_adjustments", session.get("adjustments", [{}, {}]))}
-        self._apply_adjustments_from_session(compare_adjustments, target_adj_vars=self.compare_row_adj_vars)
-
-        self.show_compare_row_var.set(True)
-        self._on_compare_row_toggle()
-
-        def finish_load(applied_nr):
-            self._schedule_render()
-            if applied_nr:
-                self.status_var.set(
-                    f"Loaded bottom row from session {path} and applied saved image settings. "
-                    "Row-to-row alignment was reset so you can align this session against the top row."
-                )
-            else:
-                self.status_var.set(
-                    f"Loaded bottom row from session {path}. "
-                    "Row-to-row alignment was reset so you can align this session against the top row."
-                )
-
-        self._apply_saved_noise_reduction_from_session(self, session, row="compare", on_complete=finish_load)
-
-    def _load_noise_reduction_settings_from_session(self, target, session, row="top"):
-        defaults = [
-            {"amount": 0, "aggressive": False, "color": 50, "edge": 100},
-            {"amount": 0, "aggressive": False, "color": 50, "edge": 100},
-        ]
-        if row == "compare":
-            saved = session.get("compare_noise_reduction", session.get("noise_reduction", defaults))
-            amount_vars = target.compare_row_nr_amount_vars
-            aggressive_vars = target.compare_row_nr_aggressive_vars
-            color_vars = target.compare_row_nr_color_vars
-            edge_vars = target.compare_row_nr_edge_vars
-        else:
-            saved = session.get("noise_reduction", defaults)
-            amount_vars = target.nr_amount_vars
-            aggressive_vars = target.nr_aggressive_vars
-            color_vars = target.nr_color_vars
-            edge_vars = target.nr_edge_vars
-        for idx in range(2):
-            cfg = saved[idx] if idx < len(saved) else defaults[idx]
-            amount_vars[idx].set(int(cfg.get("amount", defaults[idx]["amount"])))
-            aggressive_vars[idx].set(bool(cfg.get("aggressive", defaults[idx]["aggressive"])))
-            color_vars[idx].set(int(cfg.get("color", defaults[idx]["color"])))
-            edge_vars[idx].set(int(cfg.get("edge", defaults[idx]["edge"])))
-
-    def _apply_saved_noise_reduction_from_session(self, target, session, row="top", on_complete=None):
-        self._load_noise_reduction_settings_from_session(target, session, row=row)
-        image_list = target.compare_row_images if row == "compare" else target.images
-        amount_vars = target.compare_row_nr_amount_vars if row == "compare" else target.nr_amount_vars
-        indices = []
-        for idx in range(2):
-            if image_list[idx] is not None and amount_vars[idx].get() > 0:
-                indices.append(idx)
-
-        if not indices:
-            if on_complete is not None:
-                on_complete(False)
-            return
-
-        state = {"all_succeeded": True}
-
-        def apply_next(pos=0):
-            if pos >= len(indices):
-                if on_complete is not None:
-                    on_complete(state["all_succeeded"])
-                return
-
-            idx = indices[pos]
-
-            def step_done(success):
-                if not success:
-                    state["all_succeeded"] = False
-                apply_next(pos + 1)
-
-            target._apply_noise_reduction(idx, row=row, on_complete=step_done)
-
-        target.root.after(0, apply_next)
-
-    def _new_session(self):
-        answer = messagebox.askyesnocancel(
-            "New session",
-            "Save before starting a new session?\n\n"
-            "Yes: choose where to save the current session first, then start a new blank session.\n"
-            "No: start a new blank session now without saving.\n"
-            "Cancel: keep working in the current session.",
-            parent=self.root,
-        )
-        if answer is None:
-            return
-        if answer:
-            saved_path = self._save_session()
-            if not saved_path:
-                return
-        self._reset_session_state()
-
-    def _import_image_settings_from_session(self):
-        path = filedialog.askopenfilename(
-            title="Import image settings from session",
-            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            with open(path, encoding="utf-8") as f:
-                session = json.load(f)
-        except Exception as exc:
-            messagebox.showerror(
-                "Import image settings",
-                f"Could not read session file:\n{exc}",
-                parent=self.root,
-            )
-            return
-
-        if "adjustments" not in session:
-            messagebox.showinfo(
-                "Import image settings",
-                "That session does not contain saved image adjustment settings.",
-                parent=self.root,
-            )
-            return
-
-        self._apply_adjustments_from_session(session)
-        self._schedule_render()
-        self.status_var.set(f"Imported image settings from {path}.")
-
-    def _fit_similarity_transform(self, source_points, target_points):
-        src = np.array(source_points, dtype=float)
-        dst = np.array(target_points, dtype=float)
-        if src.shape[0] < 2 or dst.shape[0] < 2:
-            raise ValueError("at least 2 point pairs are required")
-
-        src_mean = src.mean(axis=0)
-        dst_mean = dst.mean(axis=0)
-        src_centered = src - src_mean
-        dst_centered = dst - dst_mean
-
-        src_energy = float((src_centered ** 2).sum())
-        if src_energy <= 0.0:
-            raise ValueError("source points are degenerate")
-
-        covariance = src_centered.T @ dst_centered
-        u, singular_vals, vt = np.linalg.svd(covariance)
-        rot = vt.T @ u.T
-        if np.linalg.det(rot) < 0:
-            vt[-1, :] *= -1
-            rot = vt.T @ u.T
-
-        scale = float(singular_vals.sum() / src_energy)
-
-        def transform_point(point):
-            point_arr = np.array(point, dtype=float)
-            return scale * ((point_arr - src_mean) @ rot) + dst_mean
-
-        return transform_point, scale
-
-    def _save_session(self):
-        session = {
-            "version": 1,
-            "image_paths": self.image_paths,
+    def _session_record(self, session_path):
+        """What a session file holds: the current row only.  A reference row is another
+        inspection with a session of its own; all that is kept of it here is how the
+        two line up, so that loading it again as the reference restores the alignment."""
+        session_dir = Path(session_path).resolve().parent
+        current = self.pairs[CURRENT]
+        record = {
+            "version": SESSION_VERSION,
+            "app_version": APP_VERSION,
+            "image_paths": list(current.paths),
+            "image_paths_rel": [relative_to(p, session_dir) for p in current.paths],
             "mode": self.mode_var.get(),
-            "opacity": self.opacity_var.get(),
+            "opacity": float(self.opacity_var.get()),
             "zoom": self.zoom,
             "pan_x": self.pan_x,
             "pan_y": self.pan_y,
-            "alignment": {
-                "off_x": self.off_x_var.get(),
-                "off_y": self.off_y_var.get(),
-                "rot": self.rot_var.get(),
-                "img2_scale": self.img2_scale_var.get(),
-                "glob_rot": self.glob_rot_var.get(),
-            },
-            "annotations": [self._normalize_annotation_record(ann) for ann in self.annotations],
-            "colour_labels": self.colour_labels,
-            "align_pts_img1": self._align_pts_img1,
-            "align_pts_img2": self._align_pts_img2,
-            "adjustments": [
-                {k: v.get() for k, v in d.items()} for d in self.adj_vars
-            ],
-            "noise_reduction": [
-                {
-                    "amount": self.nr_amount_vars[i].get(),
-                    "aggressive": bool(self.nr_aggressive_vars[i].get()),
-                    "color": self.nr_color_vars[i].get(),
-                    "edge": self.nr_edge_vars[i].get(),
-                }
-                for i in range(2)
-            ],
-            "compare_row_enabled": bool(self.show_compare_row_var.get()),
-            "compare_image_paths": self.compare_row_image_paths,
-            "compare_alignment": {
-                "off_x": self.compare_row_off_x_var.get(),
-                "off_y": self.compare_row_off_y_var.get(),
-                "rot": self.compare_row_rot_var.get(),
-                "img2_scale": self.compare_row_img2_scale_var.get(),
-                "glob_rot": self.compare_row_glob_rot_var.get(),
-            },
-            "compare_row_transform": {
-                "off_x": self.compare_row_shift_x_var.get(),
-                "off_y": self.compare_row_shift_y_var.get(),
-                "rot": self.compare_row_shift_rot_var.get(),
-                "scale": self.compare_row_shift_scale_var.get(),
-            },
-            "compare_adjustments": [
-                {k: v.get() for k, v in d.items()} for d in self.compare_row_adj_vars
-            ],
-            "compare_noise_reduction": [
-                {
-                    "amount": self.compare_row_nr_amount_vars[i].get(),
-                    "aggressive": bool(self.compare_row_nr_aggressive_vars[i].get()),
-                    "color": self.compare_row_nr_color_vars[i].get(),
-                    "edge": self.compare_row_nr_edge_vars[i].get(),
-                }
-                for i in range(2)
-            ],
+            "alignment": current.alignment_record(),
+            "annotations": [normalise_annotation(a) for a in current.annotations],
+            "colour_labels": dict(current.colour_labels),
+            "label_prefixes": dict(current.label_prefixes),
+            "filter_outline": [list(p) for p in current.outline],
+            "align_pts_img1": [],
+            "align_pts_img2": [],
+            "adjustments": [dict(a) for a in current.adjust],
+            "noise_reduction": [dict(n) for n in current.nr],
+            "raw_develop": [develop_record(d, session_dir) for d in current.develop],
+            "camera_settings": [dict(c) for c in current.camera],
+            "row_alignments": self._row_alignments_to_save(session_dir),
         }
+        return record
+
+    def _row_alignments_to_save(self, session_dir):
+        """The current row's known alignments to other sessions, with the one to the
+        reference row now shown brought up to date."""
+        current, reference = self.pairs
+        alignments = {key: dict(value) for key, value in current.row_alignments.items()}
+        if reference.session_path and reference.has_image(BACKLIT) and current.has_image(BACKLIT):
+            key = alignment_key(reference.session_path, session_dir)
+            aligned = any(abs(self.row_shift[name] - rest) > 1e-9
+                          for name, rest in (("x", 0.0), ("y", 0.0), ("rot", 0.0), ("scale", 1.0)))
+            if aligned or key in alignments:
+                alignments[key] = {
+                    "off_x": round(self.row_shift["x"], 3),
+                    "off_y": round(self.row_shift["y"], 3),
+                    "rot": round(self.row_shift["rot"], 4),
+                    "scale": round(self.row_shift["scale"], 5),
+                    "current_rotation": round(current.glob_rot, 4),
+                    "reference_rotation": round(reference.glob_rot, 4),
+                }
+        return alignments
+
+    def _restore_row_alignment(self):
+        """Line the rows up as they were when these two sessions were last saved together.
+        Returns whether a saved alignment was found."""
+        current, reference = self.pairs
+        if not (current.session_path and reference.session_path
+                and current.has_image(BACKLIT) and reference.has_image(BACKLIT)):
+            return False
+        record = current.row_alignments.get(
+            alignment_key(reference.session_path, Path(current.session_path).resolve().parent))
+        if record is not None:
+            self.set_row_matrix(row_matrix_from_record(record, current, reference))
+            return True
+        # Saved the other way round, with today's reference row as the current one.
+        record = reference.row_alignments.get(
+            alignment_key(current.session_path, Path(reference.session_path).resolve().parent))
+        if record is not None:
+            self.set_row_matrix(geo.invert(row_matrix_from_record(record, reference, current)))
+            return True
+        return False
+
+    # ------------------------------------------------------------------ #
+    # Save
+    # ------------------------------------------------------------------ #
+
+    def save_session(self):
+        if not self.session_path:
+            return self.save_session_as()
+        return self._write_session(self.session_path)
+
+    def save_session_as(self):
+        initial_dir = None
+        if self.session_path:
+            initial_dir = os.path.dirname(self.session_path)
+        elif self.pairs[0].paths[BACKLIT] or self.pairs[0].paths[FRONTLIT]:
+            initial_dir = os.path.dirname(self.pairs[0].paths[BACKLIT] or self.pairs[0].paths[FRONTLIT])
         path = filedialog.asksaveasfilename(
+            parent=self.root,
             title="Save session",
             defaultextension=".json",
-            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
+            initialdir=initial_dir or self._dialog_dir(),
+            initialfile=os.path.basename(self.session_path) if self.session_path else "session.json",
+            filetypes=SESSION_FILETYPES,
         )
         if not path:
             return None
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(session, f, indent=2)
-        self.status_var.set(f"Session saved -> {path}")
+        return self._write_session(path)
+
+    def _write_session(self, path):
+        record = self._session_record(path)
+        try:
+            write_session(path, record)
+        except OSError as exc:
+            messagebox.showerror("Save session", f"Could not save the session:\n{path}\n\n{exc}",
+                                 parent=self.root)
+            return None
+        self.pairs[0].row_alignments = record["row_alignments"]
+        self.session_path = path
+        self.pairs[0].session_path = path
+        self.pairs[0].label = describe_location(path)
+        self.dirty = False
+        self.config.add_recent(path)
+        self._remember_dir(path)
+        self._refresh_recent_menu()
+        self._update_title()
+        self._draw_overlays()
+        self.set_status(f"Session saved: {path}")
         return path
 
-    def _load_session(self):
-        path = filedialog.askopenfilename(
-            title="Load session",
-            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            with open(path, encoding="utf-8") as f:
-                session = json.load(f)
-        except Exception as exc:
-            messagebox.showerror("Load error", f"Could not read session file:\n{exc}",
-                                 parent=self.root)
-            return
-
-        dlg = tk.Toplevel(self.root)
-        dlg.title("Load Session - Verify image paths")
-        dlg.configure(bg="#2b2b2b")
-        dlg.resizable(True, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        saved_paths = list(session.get("image_paths", [None, None]))
-        while len(saved_paths) < 2:
-            saved_paths.append(None)
-        path_vars = [tk.StringVar(value=p or "") for p in saved_paths]
-        compare_enabled = bool(session.get("compare_row_enabled", False) or any(session.get("compare_image_paths", [])))
-        compare_saved_paths = list(session.get("compare_image_paths", [None, None]))
-        while len(compare_saved_paths) < 2:
-            compare_saved_paths.append(None)
-        compare_path_vars = [tk.StringVar(value=p or "") for p in compare_saved_paths[:2]]
-
-        tk.Label(dlg, text="Image files to load  (edit or Browse to choose different files):",
-                 bg="#2b2b2b", fg="#ccc",
-                 font=("TkDefaultFont", 9, "bold")).pack(padx=12, pady=(10, 4), anchor=tk.W)
-
-        for i, (pv, label) in enumerate(zip(path_vars, [f"{BACKLIT_IMAGE_LABEL}:", f"{FRONTLIT_IMAGE_LABEL}:"])):
-            row = tk.Frame(dlg, bg="#2b2b2b")
-            row.pack(fill=tk.X, padx=10, pady=3)
-            tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa",
-                     width=8, anchor=tk.W).pack(side=tk.LEFT)
-            tk.Entry(row, textvariable=pv, bg="#444", fg="white",
-                     insertbackground="white", relief=tk.FLAT,
-                     width=60).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-
-            def browse(var=pv):
-                selected = filedialog.askopenfilename(
-                    filetypes=[
-                        ("Image files",
-                         "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
-                         "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
-                         "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
-                         "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
-                        ("All files", "*.*"),
-                    ]
-                )
-                if selected:
-                    var.set(selected)
-
-            tk.Button(row, text="Browse...", command=browse,
-                      bg="#555", fg="white", relief=tk.FLAT, padx=6, pady=2,
-                      cursor="hand2").pack(side=tk.LEFT, padx=4)
-
-        if compare_enabled:
-            tk.Label(dlg, text="Bottom-row image files to load:",
-                     bg="#2b2b2b", fg="#ccc",
-                     font=("TkDefaultFont", 9, "bold")).pack(padx=12, pady=(10, 4), anchor=tk.W)
-            for pv, label in zip(compare_path_vars, [f"{BACKLIT_IMAGE_LABEL} (Bottom):", f"{FRONTLIT_IMAGE_LABEL} (Bottom):"]):
-                row = tk.Frame(dlg, bg="#2b2b2b")
-                row.pack(fill=tk.X, padx=10, pady=3)
-                tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa",
-                         width=23, anchor=tk.W).pack(side=tk.LEFT)
-                tk.Entry(row, textvariable=pv, bg="#444", fg="white",
-                         insertbackground="white", relief=tk.FLAT,
-                         width=60).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-
-                def browse_compare(var=pv):
-                    selected = filedialog.askopenfilename(
-                        filetypes=[
-                            ("Image files",
-                             "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
-                             "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
-                             "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
-                             "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
-                            ("All files", "*.*"),
-                        ]
-                    )
-                    if selected:
-                        var.set(selected)
-
-                tk.Button(row, text="Browse...", command=browse_compare,
-                          bg="#555", fg="white", relief=tk.FLAT, padx=6, pady=2,
-                          cursor="hand2").pack(side=tk.LEFT, padx=4)
-
-        btn_row = tk.Frame(dlg, bg="#2b2b2b")
-        btn_row.pack(pady=10)
-        confirmed = [False]
-
-        def on_ok():
-            confirmed[0] = True
-            dlg.destroy()
-
-        tk.Button(btn_row, text="Load", command=on_ok,
-                  bg="#336633", fg="white", relief=tk.FLAT, padx=12, pady=4,
-                  cursor="hand2").pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_row, text="Cancel", command=dlg.destroy,
-                  bg="#555", fg="white", relief=tk.FLAT, padx=12, pady=4,
-                  cursor="hand2").pack(side=tk.LEFT, padx=6)
-
-        self.root.wait_window(dlg)
-        if not confirmed[0]:
-            return
-
-        self.compare_row_images = [None, None]
-        self.compare_row_image_paths = [None, None]
-        self.compare_row_preview_images = [None, None]
-        self.compare_row_preview_scales = [1.0, 1.0]
-        self.compare_row_photos = [None, None]
-        self._compare_row_base_images = [None, None]
-        self._compare_row_rotated_cache = [None, None]
-        self._compare_row_last_rot = [None, None]
-        self._compare_row_rotated_preview_cache = [None, None]
-        self._compare_row_last_rot_preview = [None, None]
-        self.compare_row_off_x_var.set("0")
-        self.compare_row_off_y_var.set("0")
-        self.compare_row_rot_var.set("0.0")
-        self.compare_row_img2_scale_var.set("1.000")
-        self.compare_row_glob_rot_var.set("0.0")
-        self.compare_row_shift_x_var.set("0")
-        self.compare_row_shift_y_var.set("0")
-        self.compare_row_shift_rot_var.set("0.0")
-        self.compare_row_shift_scale_var.set("1.000")
-        self._clear_compare_row_align_pts()
-        self._clear_row_align_pts()
-
-        final_paths = [pv.get().strip() or None for pv in path_vars]
-        for i, loaded_path in enumerate(final_paths):
-            if loaded_path:
-                try:
-                    img = _open_image(loaded_path)
-                    if img.mode not in ("RGB", "L"):
-                        img = img.convert("RGB")
-                    self.images[i] = img
-                    self._base_images[i] = img
-                    self.image_paths[i] = loaded_path
-                    self.preview_images[i], self.preview_scales[i] = self._make_preview(img)
-                    self._rotated_cache[i] = None
-                    self._last_rot[i] = None
-                    self._rotated_preview_cache[i] = None
-                    self._last_rot_preview[i] = None
-                except Exception as exc:
-                    messagebox.showerror("Load error",
-                                         f"Could not load {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}:\n{loaded_path}\n\n{exc}",
-                                         parent=self.root)
-
-        if compare_enabled:
-            final_compare_paths = [pv.get().strip() or None for pv in compare_path_vars]
-            for i, loaded_path in enumerate(final_compare_paths):
-                if loaded_path:
-                    try:
-                        img = _open_image(loaded_path)
-                        if img.mode not in ("RGB", "L"):
-                            img = img.convert("RGB")
-                        self.compare_row_images[i] = img
-                        self._compare_row_base_images[i] = img
-                        self.compare_row_image_paths[i] = loaded_path
-                        self.compare_row_preview_images[i], self.compare_row_preview_scales[i] = self._make_preview(img)
-                        self._compare_row_rotated_cache[i] = None
-                        self._compare_row_last_rot[i] = None
-                        self._compare_row_rotated_preview_cache[i] = None
-                        self._compare_row_last_rot_preview[i] = None
-                    except Exception as exc:
-                        messagebox.showerror(
-                            "Load error",
-                            f"Could not load {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL} (Bottom Row):\n{loaded_path}\n\n{exc}",
-                            parent=self.root,
-                        )
-
-        alignment = session.get("alignment", {})
-        self.off_x_var.set(str(alignment.get("off_x", "0")))
-        self.off_y_var.set(str(alignment.get("off_y", "0")))
-        self.rot_var.set(str(alignment.get("rot", "0.0")))
-        self.img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
-        self.glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
-        compare_alignment = session.get("compare_alignment", {})
-        self.compare_row_off_x_var.set(str(compare_alignment.get("off_x", "0")))
-        self.compare_row_off_y_var.set(str(compare_alignment.get("off_y", "0")))
-        self.compare_row_rot_var.set(str(compare_alignment.get("rot", "0.0")))
-        self.compare_row_img2_scale_var.set(str(compare_alignment.get("img2_scale", "1.000")))
-        self.compare_row_glob_rot_var.set(str(compare_alignment.get("glob_rot", "0.0")))
-        compare_row_transform = session.get("compare_row_transform", {})
-        self.compare_row_shift_x_var.set(str(compare_row_transform.get("off_x", "0")))
-        self.compare_row_shift_y_var.set(str(compare_row_transform.get("off_y", "0")))
-        self.compare_row_shift_rot_var.set(str(compare_row_transform.get("rot", "0.0")))
-        self.compare_row_shift_scale_var.set(str(compare_row_transform.get("scale", "1.000")))
-        self.show_compare_row_var.set(compare_enabled)
-        self._on_compare_row_toggle()
-        if "mode" in session:
-            self.mode_var.set(session["mode"])
-            self._on_mode_change()
-        if "opacity" in session:
-            self.opacity_var.set(float(session["opacity"]))
-        if "zoom" in session:
-            self.zoom = float(session["zoom"])
-        if "pan_x" in session:
-            self.pan_x = float(session["pan_x"])
-        if "pan_y" in session:
-            self.pan_y = float(session["pan_y"])
-        if "annotations" in session:
-            self.annotations = [self._normalize_annotation_record(ann) for ann in session["annotations"]]
-        if "colour_labels" in session:
-            self.colour_labels = session["colour_labels"]
-        if "align_pts_img1" in session:
-            self._align_pts_img1 = [tuple(p) for p in session["align_pts_img1"]]
-        if "align_pts_img2" in session:
-            self._align_pts_img2 = [tuple(p) for p in session["align_pts_img2"]]
-        self._apply_adjustments_from_session(session)
-        if "compare_adjustments" in session:
-            self._apply_adjustments_from_session({"adjustments": session["compare_adjustments"]}, target_adj_vars=self.compare_row_adj_vars)
-
-        def finish_load(applied_nr):
-            self._schedule_render()
-            if applied_nr:
-                self.status_var.set(f"Session loaded from {path} and saved NR was applied.")
-            else:
-                self.status_var.set(f"Session loaded from {path}")
-
-        self._apply_saved_noise_reduction_from_session(self, session, on_complete=finish_load)
-
-    def _apply_session_to_viewer(self, viewer, session, image_paths, loaded_images=None,
-                                 force_sidebyside=False):
-        while len(image_paths) < 2:
-            image_paths.append(None)
-        if loaded_images is None:
-            loaded_images = [None, None]
-        while len(loaded_images) < 2:
-            loaded_images.append(None)
-
-        viewer.images = [None, None]
-        viewer._base_images = [None, None]
-        viewer.image_paths = [None, None]
-        viewer.preview_images = [None, None]
-        viewer.preview_scales = [1.0, 1.0]
-        viewer.photos = [None, None]
-        viewer._rotated_cache = [None, None]
-        viewer._last_rot = [None, None]
-        viewer._rotated_preview_cache = [None, None]
-        viewer._last_rot_preview = [None, None]
-
-        for i, loaded_path in enumerate(image_paths[:2]):
-            img = loaded_images[i]
-            if img is None and loaded_path:
-                img = _open_image(loaded_path)
-                if img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
-            if img is None:
-                continue
-            viewer.images[i] = img
-            viewer._base_images[i] = img
-            viewer.image_paths[i] = loaded_path
-            viewer.preview_images[i], viewer.preview_scales[i] = viewer._make_preview(img)
-
-        alignment = session.get("alignment", {})
-        viewer.off_x_var.set(str(alignment.get("off_x", "0")))
-        viewer.off_y_var.set(str(alignment.get("off_y", "0")))
-        viewer.rot_var.set(str(alignment.get("rot", "0.0")))
-        viewer.img2_scale_var.set(str(alignment.get("img2_scale", "1.000")))
-        viewer.glob_rot_var.set(str(alignment.get("glob_rot", "0.0")))
-        viewer.mode_var.set("sidebyside" if force_sidebyside else session.get("mode", "sidebyside"))
-        viewer._on_mode_change()
-        if "opacity" in session:
-            viewer.opacity_var.set(float(session["opacity"]))
-        viewer.zoom = float(session.get("zoom", 1.0))
-        viewer.pan_x = float(session.get("pan_x", 0.0))
-        viewer.pan_y = float(session.get("pan_y", 0.0))
-        viewer.annotations = [self._normalize_annotation_record(ann) for ann in session.get("annotations", [])]
-        viewer.colour_labels = dict(session.get("colour_labels", {}))
-        viewer._align_pts_img1 = [tuple(p) for p in session.get("align_pts_img1", [])]
-        viewer._align_pts_img2 = [tuple(p) for p in session.get("align_pts_img2", [])]
-        for i, d in enumerate(session.get("adjustments", [{}, {}])[:2]):
-            for key in ("brightness", "contrast", "blacks", "whites"):
-                if key in d:
-                    viewer.adj_vars[i][key].set(float(d[key]))
-        self._load_noise_reduction_settings_from_session(viewer, session)
-
-        viewer.annot_mode_var.set(False)
-        viewer.align_mode_var.set(False)
-        viewer.level_mode_var.set(False)
-        viewer.crop_mode_var.set(False)
-        viewer._schedule_render()
-
-    def _set_widget_states_by_text(self, root, disabled_texts):
-        for child in root.winfo_children():
-            try:
-                text = child.cget("text")
-            except Exception:
-                text = None
-            if text in disabled_texts:
-                try:
-                    child.configure(state=tk.DISABLED)
-                except Exception:
-                    pass
-            self._set_widget_states_by_text(child, disabled_texts)
-
-    def _create_annotation_import_viewer(self, session, source_paths, source_images, path):
-        from .app import ImageComparer
-
-        win = tk.Toplevel(self.root)
-        viewer = ImageComparer(win)
-        viewer.root.title(f"Source session view - {path}")
-        viewer.root.geometry("1400x900")
-        viewer.root.transient(self.root)
-        self._apply_session_to_viewer(
-            viewer,
-            session,
-            list(source_paths),
-            loaded_images=list(source_images),
-            force_sidebyside=True,
-        )
-        self._set_widget_states_by_text(
-            viewer.root,
-            {
-                f"Load {BACKLIT_IMAGE_LABEL}",
-                f"Load {FRONTLIT_IMAGE_LABEL}",
-                " Annotate  (click=place  | right-click=delete)",
-                "Clear all",
-                "Edit labels",
-                " Point align  (click pts on backlit image, then same pts on frontlit image  | 2 pairs needed)",
-                " Point align + scale  (final click free; 2 pairs needed)",
-                "Apply align",
-                "Apply align+scale",
-                "Clear pts",
-                "Move ann",
-                "_|_ Level line  (drag a line that should be vertical -> auto-corrects rotation)",
-                " Crop export  (click 2 corners on either canvas)",
-                "Save session",
-                "Load session",
-                "Import annotations",
-            },
-        )
-
-        original_render = viewer._render
-
-        def wrapped_render():
-            original_render()
-            state = self._annotation_import
-            if state is not None and state.get("source_viewer") is viewer:
-                self._draw_annotation_import_viewer_overlays()
-
-        viewer._render = wrapped_render
-
-        controls = tk.Frame(viewer.root, bg="#1b2030", pady=4)
-        controls.pack(side=tk.TOP, fill=tk.X, before=viewer.canvas_frame)
-        help_var = tk.StringVar(
-            value=(
-                "Click an old annotation in this window, then click the matching point in the main window. "
-                f"Only {BACKLIT_IMAGE_LABEL} needs matching; {FRONTLIT_IMAGE_LABEL} is shown for reference."
-            )
-        )
-        count_vars = [tk.StringVar(value=f"{BACKLIT_IMAGE_LABEL}: 0 pair(s)"),
-                      tk.StringVar(value=f"{FRONTLIT_IMAGE_LABEL}: reference only")]
-        tk.Label(controls, textvariable=help_var, bg="#1b2030", fg="#ddd",
-                 justify=tk.LEFT, wraplength=850,
-                 font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=8)
-        tk.Label(controls, textvariable=count_vars[0], bg="#1b2030", fg="#ffcc88").pack(side=tk.LEFT, padx=8)
-        tk.Label(controls, textvariable=count_vars[1], bg="#1b2030", fg="#88ddff").pack(side=tk.LEFT, padx=8)
-        tk.Button(controls, text="Clear pairs", command=self._clear_annotation_import_pairs,
-                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=3,
-                  cursor="hand2").pack(side=tk.RIGHT, padx=4)
-        apply_btn = tk.Button(controls, text="Import", command=self._apply_annotation_import,
-                              bg="#336633", fg="white", relief=tk.FLAT, padx=14, pady=3,
-                              cursor="hand2", state=tk.DISABLED)
-        apply_btn.pack(side=tk.RIGHT, padx=4)
-        tk.Button(controls, text="Cancel", command=self._cancel_annotation_import,
-                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=3,
-                  cursor="hand2").pack(side=tk.RIGHT, padx=4)
-
-        for idx, canvas in enumerate((viewer.canvas1, viewer.canvas2)):
-            canvas.bind("<ButtonPress-1>", lambda event, i=idx: self._on_annotation_import_source_press(i, event))
-            canvas.bind("<B1-Motion>", lambda event, i=idx: self._on_annotation_import_source_motion(i, event))
-            canvas.bind("<ButtonRelease-1>", lambda event, i=idx: self._on_annotation_import_source_release(i, event))
-            canvas.bind("<Button-3>", lambda _event: "break")
-
-        def on_close():
-            self._cancel_annotation_import()
-
-        viewer.root.protocol("WM_DELETE_WINDOW", on_close)
-        viewer.status_var.set(
-            "Import annotations: use this window to choose source annotations; use the main window to place their matches."
-        )
-        viewer._schedule_render()
-        return viewer, help_var, count_vars, apply_btn
-
-    def _import_annotations_from_session(self):
-        if self.images[0] is None or self.images[1] is None:
-            messagebox.showinfo(
-                "Import annotations",
-                f"Load the current {BACKLIT_IMAGE_LABEL} and {FRONTLIT_IMAGE_LABEL} first, then import annotations.",
-                parent=self.root,
-            )
-            return
-        if self._annotation_import is not None:
-            win = self._annotation_import.get("win")
-            if win is not None and win.winfo_exists():
-                win.lift()
-                return
-            self._annotation_import = None
-
-        confirmed = messagebox.askyesno(
-            "Import annotations",
-            f"Have you already aligned the current {BACKLIT_IMAGE_LABEL} and {FRONTLIT_IMAGE_LABEL}?\n\n"
-            "Imported annotations assume the current pair is already aligned before import.",
+    def _confirm_discard(self, action):
+        """Offer to save unsaved work before ``action``.  False means cancel the action."""
+        if not self.dirty:
+            return True
+        answer = messagebox.askyesnocancel(
+            "Unsaved changes",
+            f"Save your changes before you {action}?",
             parent=self.root,
         )
-        if not confirmed:
-            self.status_var.set("Import annotations cancelled: align the current image pair first.")
-            return
+        if answer is None:
+            return False
+        if answer:
+            return self.save_session() is not None
+        return True
 
+    # ------------------------------------------------------------------ #
+    # New / open
+    # ------------------------------------------------------------------ #
+
+    def new_session(self):
+        if not self._confirm_discard("start a new session"):
+            return
+        self._reset_state()
+        self.set_status("New session.  Load a backlit and a frontlit image to begin.")
+
+    def _ask_session_file(self, title):
         path = filedialog.askopenfilename(
-            title="Import annotations from session",
-            filetypes=[("Session file", "*.json"), ("All files", "*.*")],
-        )
+            parent=self.root, title=title, initialdir=self._dialog_dir(), filetypes=SESSION_FILETYPES)
+        return path or None
+
+    def _read_session_or_report(self, path, title):
+        try:
+            return read_session(path)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(title, f"Could not read the session file:\n{path}\n\n{exc}",
+                                 parent=self.root)
+            return None
+
+    def _locate_images(self, title, entries):
+        """Resolve image paths, asking only about the ones that cannot be found.
+
+        ``entries`` is a list of ``(label, resolved_path, saved_path)``.  Returns
+        the final path list (``None`` for images to leave out), or ``None`` if
+        the user cancelled.
+        """
+        missing = [i for i, (_label, resolved, saved) in enumerate(entries) if saved and not resolved]
+        final = [resolved for _label, resolved, _saved in entries]
+        if not missing:
+            return final
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.configure(bg=theme.PANEL)
+        dialog.transient(self.root)
+        dialog.resizable(True, False)
+        pad = self.px(14)
+        ttk.Label(
+            dialog,
+            text="These images are not where the session expects them.\n"
+                 "Choose each file, or leave a box empty to open the session without that image.",
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=pad, pady=(pad, self.px(8)))
+
+        path_vars = {}
+        for i in missing:
+            label, _resolved, saved = entries[i]
+            block = ttk.Frame(dialog)
+            block.pack(fill=tk.X, padx=pad, pady=self.px(4))
+            ttk.Label(block, text=label, style="Panel.TLabel", font=self.fonts["bold"]).pack(anchor=tk.W)
+            ttk.Label(block, text=f"Saved as: {saved}", style="Muted.TLabel",
+                      wraplength=self.px(640), justify=tk.LEFT).pack(anchor=tk.W)
+            line = ttk.Frame(block)
+            line.pack(fill=tk.X, pady=(self.px(2), 0))
+            var = tk.StringVar(value="")
+            path_vars[i] = var
+            ttk.Entry(line, textvariable=var, width=70).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            def browse(v=var, name=label):
+                chosen = filedialog.askopenfilename(
+                    parent=dialog, title=f"Locate {name.lower()}",
+                    initialdir=self._dialog_dir(), filetypes=IMAGE_FILETYPES)
+                if chosen:
+                    v.set(chosen)
+                    self._remember_dir(chosen)
+
+            ttk.Button(line, text="Browse...", command=browse).pack(side=tk.LEFT, padx=(self.px(6), 0))
+
+        outcome = {"ok": False}
+
+        def accept():
+            outcome["ok"] = True
+            dialog.destroy()
+
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=pad, pady=pad)
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Open", style="Accent.TButton", command=accept).pack(
+            side=tk.RIGHT, padx=(0, self.px(8)))
+        dialog.bind("<Return>", lambda _e: accept())
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        self._centre_dialog(dialog)
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        if not outcome["ok"]:
+            return None
+        for i, var in path_vars.items():
+            final[i] = var.get().strip() or None
+        return final
+
+    def _confirm_two_row_session(self, title, session, path, row):
+        """An earlier version saved the reference row inside the session.  Say that only
+        the session's own row is loaded now.  False cancels the load."""
+        lines = [
+            f"{os.path.basename(path)} was saved by an earlier version with two rows in it.",
+            "",
+            "A session now holds one inspection.  Only what was its current row will be loaded"
+            + (", into the reference row." if row == REFERENCE else "."),
+            "",
+            f"Its reference row was:  {describe_saved_reference(session)}",
+            "To compare with that inspection, load its own session into the reference row.",
+        ]
+        if session.get("compare_session_path_rel"):
+            lines.append("The alignment between the two rows is kept and comes back when you do.")
+        if row == CURRENT:
+            lines += ["", "Saving will rewrite the file with the one row only."]
+        return messagebox.askokcancel(title, "\n".join(lines), icon="warning", parent=self.root)
+
+    def open_session(self, path=None, row=CURRENT):
+        """Load a session -- one inspection's images, alignment and markers -- into the
+        current row, or into the reference row to compare against.  The other row stays."""
+        title = "Load session into reference row" if row == REFERENCE else "Open session"
+        if row == CURRENT and not self._confirm_discard("open another session"):
+            return
+        path = path or self._ask_session_file(title)
         if not path:
             return
-        try:
-            with open(path, encoding="utf-8") as f:
-                session = json.load(f)
-        except Exception as exc:
-            messagebox.showerror(
-                "Import error",
-                f"Could not read session file:\n{exc}",
-                parent=self.root,
-            )
+        session = self._read_session_or_report(path, title)
+        if session is None:
+            return
+        self._remember_dir(path)
+        if session_has_reference(session) and not self._confirm_two_row_session(title, session, path, row):
             return
 
-        annotations = session.get("annotations", [])
-        if not annotations:
-            messagebox.showinfo(
-                "Import annotations",
-                "That session does not contain any annotations.",
-                parent=self.root,
-            )
+        # Always the session's own row -- never the reference row an earlier version saved with it.
+        resolved, saved = session_image_paths(session, path)
+        entries = [(self._image_label(i, row), resolved[i], saved[i]) for i in (BACKLIT, FRONTLIT)]
+        final = self._locate_images(title, entries)
+        if final is None:
+            return
+        if row == REFERENCE and not any(final):
+            messagebox.showinfo(title, "That session does not name any images to load.", parent=self.root)
             return
 
-        saved_paths = list(session.get("image_paths", [None, None]))
-        while len(saved_paths) < 2:
-            saved_paths.append(None)
+        pair = ImagePair()
+        fill_pair_from_session(pair, session)
+        missing_frames = resolve_frame_paths(pair, session.get("raw_develop"), Path(path).resolve().parent)
+        pair.row_alignments = row_alignments_from_session(session)
+        pair.label = describe_location(path)
+        pair.session_path = path
+        jobs = [((row, idx), image_path, pair.nr[idx], pair.develop[idx])
+                for idx, image_path in enumerate(final) if image_path]
 
-        dlg = tk.Toplevel(self.root)
-        dlg.title("Import Annotations - Verify source image paths")
-        dlg.configure(bg="#2b2b2b")
-        dlg.resizable(True, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        path_vars = [tk.StringVar(value=p or "") for p in saved_paths[:2]]
-        tk.Label(
-            dlg,
-            text="Source images from the saved session  (edit or Browse if paths changed):",
-            bg="#2b2b2b",
-            fg="#ccc",
-            font=("TkDefaultFont", 9, "bold"),
-        ).pack(padx=12, pady=(10, 4), anchor=tk.W)
-
-        for pv, label in zip(path_vars, [f"Source {BACKLIT_IMAGE_LABEL}:", f"Source {FRONTLIT_IMAGE_LABEL}:"]):
-            row = tk.Frame(dlg, bg="#2b2b2b")
-            row.pack(fill=tk.X, padx=10, pady=3)
-            tk.Label(row, text=label, bg="#2b2b2b", fg="#aaa",
-                     width=14, anchor=tk.W).pack(side=tk.LEFT)
-            tk.Entry(row, textvariable=pv, bg="#444", fg="white",
-                     insertbackground="white", relief=tk.FLAT,
-                     width=60).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-
-            def browse(var=pv):
-                selected = filedialog.askopenfilename(
-                    filetypes=[
-                        ("Image files",
-                         "*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
-                         "*.jpg *.JPG *.jpeg *.JPEG *.bmp *.BMP "
-                         "*.arw *.ARW *.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 "
-                         "*.dng *.DNG *.orf *.ORF *.rw2 *.RW2 *.raf *.RAF"),
-                        ("All files", "*.*"),
-                    ]
-                )
-                if selected:
-                    var.set(selected)
-
-            tk.Button(row, text="Browse...", command=browse,
-                      bg="#555", fg="white", relief=tk.FLAT, padx=6, pady=2,
-                      cursor="hand2").pack(side=tk.LEFT, padx=4)
-
-        confirmed = [False]
-
-        def on_ok():
-            confirmed[0] = True
-            dlg.destroy()
-
-        btn_row = tk.Frame(dlg, bg="#2b2b2b")
-        btn_row.pack(pady=10)
-        tk.Button(btn_row, text="Open", command=on_ok,
-                  bg="#336633", fg="white", relief=tk.FLAT, padx=12, pady=4,
-                  cursor="hand2").pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_row, text="Cancel", command=dlg.destroy,
-                  bg="#555", fg="white", relief=tk.FLAT, padx=12, pady=4,
-                  cursor="hand2").pack(side=tk.LEFT, padx=6)
-
-        self.root.wait_window(dlg)
-        if not confirmed[0]:
-            return
-
-        source_paths = [pv.get().strip() or None for pv in path_vars]
-        source_images = [None, None]
-        for i, source_path in enumerate(source_paths):
-            if not source_path:
-                messagebox.showerror(
-                    "Import annotations",
-                    f"Please choose the source file for {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}.",
-                    parent=self.root,
-                )
+        def finished(loaded, errors):
+            if errors:
+                self._report_load_errors(title, errors)
+                self.set_status("Session not opened: an image could not be loaded.")
                 return
-            try:
-                img = _open_image(source_path)
-                if img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
-                source_images[i] = img
-            except Exception as exc:
-                messagebox.showerror(
-                    "Import annotations",
-                    f"Could not load source {BACKLIT_IMAGE_LABEL if i == 0 else FRONTLIT_IMAGE_LABEL}:\n{source_path}\n\n{exc}",
-                    parent=self.root,
-                )
-                return
+            for (_row, idx), (image_path, base, pyramid) in loaded.items():
+                pair.set_image(idx, image_path, base, pyramid)
+                if idx == BACKLIT:
+                    shift_legacy_raw_markers(pair, session, base)
+            other = self.pairs[REFERENCE if row == CURRENT else CURRENT]
+            if row == CURRENT:
+                reference_shown = self.show_reference_var.get() and other.has_any_image()
+                self._reset_state()
+                self.pairs = [pair, other]
+                self.show_reference_var.set(reference_shown)
+                self.mode_var.set("overlay" if session.get("mode") == "overlay" else "sidebyside")
+                self.opacity_var.set(_float(session.get("opacity"), 0.5))
+                self.session_path = path
+                self.config.add_recent(path)
+                self._refresh_recent_menu()
+            else:
+                was_dirty = self.dirty
+                self.pairs[REFERENCE] = pair
+                self.show_reference_var.set(True)
+                self._clear_tool_points(redraw=False)
+                if self.tool_var.get() in ("review", "detect"):
+                    self.set_tool("pan")
+                # Undo history refers to the row that was there before.
+                self._undo_stack.clear()
+                self._redo_stack.clear()
+                self._last_checkpoint = (None, 0.0)
+                self._update_undo_buttons()
+                self.dirty = was_dirty
+            self.reset_row_shift()
+            restored = self._restore_row_alignment()
+            self._update_title()
+            self._layout_panes()
+            self._sync_controls()
+            saved_view = row == CURRENT and not other.has_any_image() and all(
+                key in session for key in ("zoom", "pan_x", "pan_y"))
+            if saved_view:
+                self.zoom = max(0.02, min(100.0, _float(session["zoom"], 1.0)))
+                self.pan_x = _float(session["pan_x"], 0.0)
+                self.pan_y = _float(session["pan_y"], 0.0)
+                self._view_is_fit = False
+                self._update_zoom_readout()
+                self._schedule_render()
+            else:
+                self.fit_view()
+            where = "reference row" if row == REFERENCE else "current row"
+            message = f"Session loaded into the {where}: {os.path.basename(path)} ({pair.label})."
+            if self.pairs[CURRENT].has_any_image() and self.pairs[REFERENCE].has_any_image():
+                message += ("  The alignment between the rows was restored from when they were last saved together."
+                            if restored else "  Use Align rows to register the reference row to the current row.")
+            if missing_frames:
+                message += f"  ({missing_frames} extra or dark frame(s) could not be found and were left out.)"
+            self.set_status(message)
 
-        self.mode_var.set("sidebyside")
-        self._on_mode_change()
-        self.annot_mode_var.set(False)
-        self.align_mode_var.set(False)
-        self.level_mode_var.set(False)
-        self.crop_mode_var.set(False)
+        self._load_images(jobs, finished, title="Opening session" if row == CURRENT else "Loading reference session")
 
-        viewer, help_var, count_vars, apply_btn = self._create_annotation_import_viewer(
-            session,
-            source_paths,
-            source_images,
-            path,
-        )
+    def open_reference_session(self, path=None):
+        """Load another inspection's session as the reference row."""
+        self.open_session(path, row=REFERENCE)
 
-        self._annotation_import = {
-            "path": path,
-            "win": viewer.root,
-            "help_var": help_var,
-            "count_vars": count_vars,
-            "source_viewer": viewer,
-            "source_images": source_images,
-            "source_annotations": viewer.annotations,
-            "source_colour_labels": session.get("colour_labels", {}),
-            "source_pairs": [[], []],
-            "target_pairs": [[], []],
-            "matched_ann_indices": [[], []],
-            "source_press": None,
-            "pending": None,
-            "apply_btn": apply_btn,
+    # ------------------------------------------------------------------ #
+    # Image settings presets
+    # ------------------------------------------------------------------ #
+
+    def save_image_settings(self):
+        """Save the selected image's tone, noise and RAW settings to a file of their own."""
+        row, idx = self._adjust_target()
+        pair = self.pairs[row]
+        kind = "backlit" if idx == BACKLIT else "frontlit"
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title=f"Save {kind} image settings", defaultextension=".json",
+            initialdir=self._dialog_dir(), initialfile=f"{kind}_settings.json", filetypes=SETTINGS_FILETYPES)
+        if not path:
+            return None
+        record = {
+            "type": SETTINGS_FILE_TYPE,
+            "version": 1,
+            "image": kind,
+            "adjust": dict(pair.adjust[idx]),
+            "noise_reduction": dict(pair.nr[idx]),
+            "raw_develop": {key: pair.develop[idx][key] for key in ("exposure", "noise")},
+            "camera": dict(pair.camera[idx]),
+            "saved_from": os.path.basename(pair.paths[idx]) if pair.paths[idx] else None,
         }
-        self._update_annotation_import_ui()
-        self.status_var.set(
-            "Import annotations: select a source annotation in the import window, then click the matching point on the current image."
-        )
+        try:
+            write_session(path, record)
+        except OSError as exc:
+            messagebox.showerror("Save image settings", f"Could not save the settings:\n{path}\n\n{exc}",
+                                 parent=self.root)
+            return None
+        self._remember_dir(path)
+        self.set_status(f"Saved {kind} image settings: {path}")
+        return path
 
-    def _draw_annotation_import_viewer_overlays(self):
-        state = self._annotation_import
-        if state is None:
-            return
-        viewer = state.get("source_viewer")
-        if viewer is None:
-            return
-        _, _, _, glob_rot = viewer._get_alignment_values()
-        pending = state["pending"]
-        for image_idx, canvas in enumerate((viewer.canvas1, viewer.canvas2)):
-            canvas.delete("import_selection")
-            if image_idx == 1 and viewer.images[1] is None:
-                continue
-            matched = set(state["matched_ann_indices"][0])
-            for ann_index, ann in enumerate(state["source_annotations"]):
-                cx, cy = viewer._annotation_canvas_position(
-                    ann,
-                    canvas_is_2=bool(image_idx),
-                    glob_rot=glob_rot,
-                )
-                radius = max(8, float(ann.get("radius", 20)) * viewer.zoom + 4)
-                if ann_index in matched:
-                    canvas.create_oval(
-                        cx - radius,
-                        cy - radius,
-                        cx + radius,
-                        cy + radius,
-                        outline="#88ffff",
-                        width=3,
-                        tags="import_selection",
-                    )
-                if pending is not None and pending["image_idx"] == image_idx and pending["ann_index"] == ann_index:
-                    canvas.create_oval(
-                        cx - radius - 4,
-                        cy - radius - 4,
-                        cx + radius + 4,
-                        cy + radius + 4,
-                        outline="#ffaa00",
-                        width=3,
-                        dash=(4, 4),
-                        tags="import_selection",
-                    )
-            canvas.tag_raise("import_selection")
+    def _confirm_settings_camera(self, title, path, saved_for, saved_camera, row, idx):
+        """Tell the user which camera settings the saved look was made for, and whether the
+        image it is about to be applied to was taken differently.  False cancels the load."""
+        pair = self.pairs[row]
+        kind = "backlit" if idx == BACKLIT else "frontlit"
+        saved_camera = saved_camera if isinstance(saved_camera, dict) else {}
+        target_camera = pair.camera[idx]
+        lines = [
+            f"Settings from:  {os.path.basename(path)}",
+            "",
+            f"Saved from a {saved_for or 'previous'} image taken at:",
+            f"    {describe_camera(saved_camera) or 'camera settings not recorded'}",
+            f"Applying to the {self._image_label(idx, row).lower()}, taken at:",
+            f"    {describe_camera(target_camera) or 'camera settings not known'}",
+            "",
+        ]
+        differences = camera_differences(saved_camera, target_camera)
+        warn = bool(differences) or saved_for not in (None, kind)
+        if saved_for not in (None, kind):
+            lines.append(f"Note: these settings were saved from a {saved_for} image, and this is a {kind} image.")
+        if differences:
+            lines.append("The camera settings are different:")
+            lines.extend(f"    {difference}" for difference in differences)
+            stops = exposure_stops(saved_camera, target_camera)
+            if stops is not None and abs(stops) >= 0.05:
+                lines.append(f"This image received about {abs(stops):.1f} stops "
+                             f"{'more' if stops > 0 else 'less'} light, so the same brightness and "
+                             "contrast may not give the same look.")
+            elif stops is not None:
+                lines.append("Overall the exposure is almost the same, so the look should carry over.")
+        elif saved_camera and target_camera:
+            lines.append("The aperture, exposure time and ISO are the same.")
+        lines.extend(["", "Apply the settings anyway?" if warn else "Apply the settings?"])
+        return messagebox.askokcancel(title, "\n".join(lines), icon="warning" if warn else "question",
+                                      parent=self.root)
 
-    def _update_annotation_import_ui(self):
-        state = self._annotation_import
-        if state is None:
+    def load_image_settings(self, path=None):
+        """Apply saved settings -- from a settings file or a session -- to the selected image."""
+        title = "Load image settings"
+        row, idx = self._adjust_target()
+        pair = self.pairs[row]
+        kind = "backlit" if idx == BACKLIT else "frontlit"
+        if not path:
+            path = filedialog.askopenfilename(
+                parent=self.root, title=f"Load settings for the {self._image_label(idx, row).lower()}",
+                initialdir=self._dialog_dir(), filetypes=SETTINGS_FILETYPES)
+        if not path:
             return
-        state["count_vars"][0].set(f"{BACKLIT_IMAGE_LABEL}: {len(state['source_pairs'][0])} pair(s)")
-        state["count_vars"][1].set(f"{FRONTLIT_IMAGE_LABEL}: reference only")
-        pending = state["pending"]
-        if pending is None:
-            state["help_var"].set(
-                f"Click an old annotation in the source-session window on {BACKLIT_IMAGE_LABEL}, then click the matching point on the current {BACKLIT_IMAGE_LABEL}. "
-                f"Do this at least twice. {FRONTLIT_IMAGE_LABEL} is shown for reference only."
-            )
+        data = self._read_session_or_report(path, title)
+        if data is None:
+            return
+        self._remember_dir(path)
+        if data.get("type") == SETTINGS_FILE_TYPE:
+            adjust, noise, develop = data.get("adjust"), data.get("noise_reduction"), data.get("raw_develop")
+            saved_for = data.get("image")
+            saved_camera = data.get("camera")
+        elif "adjustments" in data:
+            # A session file: take the settings of its image of the same kind.
+            def pick(key):
+                values = data.get(key)
+                return values[idx] if isinstance(values, list) and idx < len(values) else None
+            adjust, noise, develop = pick("adjustments"), pick("noise_reduction"), pick("raw_develop")
+            saved_for = kind
+            saved_camera = pick("camera_settings")
         else:
-            state["help_var"].set(
-                f"Selected source annotation {pending['ann_index'] + 1} on {BACKLIT_IMAGE_LABEL}. "
-                f"Now click the matching point on the current {BACKLIT_IMAGE_LABEL}."
-            )
-        can_apply = len(state["source_pairs"][0]) >= 2
-        state["apply_btn"].config(state=tk.NORMAL if can_apply else tk.DISABLED)
-        viewer = state.get("source_viewer")
-        if viewer is not None:
-            viewer.status_var.set(state["help_var"].get())
-        self._draw_annotation_import_viewer_overlays()
-
-    def _on_annotation_import_source_press(self, image_idx, event):
-        state = self._annotation_import
-        if state is None:
-            return "break"
-        state["source_press"] = {
-            "image_idx": image_idx,
-            "x": event.x,
-            "y": event.y,
-            "dragged": False,
-        }
-        return "break"
-
-    def _on_annotation_import_source_motion(self, image_idx, event):
-        state = self._annotation_import
-        if state is None:
-            return "break"
-        press = state.get("source_press")
-        if press is None or press["image_idx"] != image_idx:
-            return "break"
-        viewer = state.get("source_viewer")
-        if viewer is None:
-            return "break"
-        if (not press["dragged"]
-                and (abs(event.x - press["x"]) > 4 or abs(event.y - press["y"]) > 4)):
-            press["dragged"] = True
-            viewer._interacting = True
-            viewer.last_pan = (press["x"], press["y"])
-        if press["dragged"]:
-            viewer._on_pan(event)
-        return "break"
-
-    def _on_annotation_import_source_release(self, image_idx, event):
-        state = self._annotation_import
-        if state is None:
-            return "break"
-        press = state.get("source_press")
-        state["source_press"] = None
-        if press is None or press["image_idx"] != image_idx:
-            return "break"
-        if not press["dragged"]:
-            self._select_annotation_from_source_viewer(image_idx, event)
-        return "break"
-
-    def _select_annotation_from_source_viewer(self, image_idx, event):
-        state = self._annotation_import
-        if state is None:
-            return
-        if image_idx != 0:
-            self.status_var.set(
-                f"Import annotations: only source {BACKLIT_IMAGE_LABEL} is used for matching. {FRONTLIT_IMAGE_LABEL} is for reference."
-            )
-            return
-        if state["pending"] is not None:
-            self.status_var.set(
-                "Import annotations: finish the current match on the main image first."
-            )
+            messagebox.showinfo(title, "That file does not contain image settings.", parent=self.root)
             return
 
-        viewer = state.get("source_viewer")
-        if viewer is None:
-            return
-        _, _, _, glob_rot = viewer._get_alignment_values()
-
-        closest = None
-        min_dist = float("inf")
-        for ann_index, ann in enumerate(state["source_annotations"]):
-            cx, cy = viewer._annotation_canvas_position(
-                ann,
-                canvas_is_2=bool(image_idx),
-                glob_rot=glob_rot,
-            )
-            dist = math.hypot(event.x - cx, event.y - cy)
-            if dist < min_dist:
-                min_dist = dist
-                closest = ann_index
-        if closest is None or min_dist > 30:
-            self.status_var.set(
-                f"Import annotations: click closer to a source annotation on {BACKLIT_IMAGE_LABEL}."
-            )
-            return
-        if closest in state["matched_ann_indices"][0]:
-            self.status_var.set(
-                f"Import annotations: source annotation {closest + 1} on {BACKLIT_IMAGE_LABEL} is already used."
-            )
+        if not self._confirm_settings_camera(title, path, saved_for, saved_camera, row, idx):
             return
 
-        ann = state["source_annotations"][closest]
-        state["pending"] = {
-            "image_idx": 0,
-            "ann_index": closest,
-            "point": (float(ann["img1_x"]), float(ann["img1_y"])),
-        }
-        self.status_var.set(
-            f"Import annotations: selected source annotation {closest + 1} on {BACKLIT_IMAGE_LABEL}; "
-            f"click the matching point on the current {BACKLIT_IMAGE_LABEL}."
-        )
-        self._update_annotation_import_ui()
+        def replaced(current, new):
+            records = [dict(r) for r in current]
+            if isinstance(new, dict):
+                records[idx] = new
+            return records
 
-    def _handle_annotation_import_target_click(self, event):
-        state = self._annotation_import
-        if state is None:
-            return
-        pending = state["pending"]
-        if pending is None:
-            self.status_var.set(
-                "Import annotations: select a source annotation in the import window first."
-            )
-            return
-
-        if event.widget != self.canvas1:
-            self.status_var.set(
-                f"Import annotations: place the matching point on the current {BACKLIT_IMAGE_LABEL} only."
-            )
-            return
-        image_idx = 0
-        target_point = self._canvas_to_img1(event.x, event.y)
-
-        if image_idx != pending["image_idx"]:
-            self.status_var.set(
-                f"Import annotations: the next target click must be on the current {BACKLIT_IMAGE_LABEL if pending['image_idx'] == 0 else FRONTLIT_IMAGE_LABEL}."
-            )
-            return
-
-        state["source_pairs"][image_idx].append(pending["point"])
-        state["target_pairs"][image_idx].append((float(target_point[0]), float(target_point[1])))
-        state["matched_ann_indices"][0].append(pending["ann_index"])
-        state["pending"] = None
-        self.status_var.set(
-            f"Import annotations: stored pair {len(state['source_pairs'][0])} for {BACKLIT_IMAGE_LABEL}."
-        )
-        self._update_annotation_import_ui()
-
-    def _clear_annotation_import_pairs(self):
-        state = self._annotation_import
-        if state is None:
-            return
-        state["source_pairs"] = [[], []]
-        state["target_pairs"] = [[], []]
-        state["matched_ann_indices"] = [[], []]
-        state["pending"] = None
-        self.status_var.set("Import annotations: cleared all matching pairs.")
-        self._update_annotation_import_ui()
-
-    def _cancel_annotation_import(self):
-        state = self._annotation_import
-        self._annotation_import = None
-        if state is None:
-            return
-        win = state.get("win")
-        if win is not None and win.winfo_exists():
-            win.destroy()
-        self.status_var.set("Import annotations cancelled.")
-
-    def _apply_annotation_import(self):
-        state = self._annotation_import
-        if state is None:
-            return
-        try:
-            transform, scale = self._fit_similarity_transform(
-                state["source_pairs"][0],
-                state["target_pairs"][0],
-            )
-        except Exception as exc:
-            messagebox.showerror(
-                "Import annotations",
-                f"Could not compute the annotation transform:\n{exc}",
-                parent=state.get("win"),
-            )
-            return
-
-        imported = []
-        radius_scale = float(scale)
-        for ann in state["source_annotations"]:
-            ann_copy = self._normalize_annotation_record(ann)
-            p1 = transform((ann_copy["img1_x"], ann_copy["img1_y"]))
-            ann_copy["img1_x"] = float(p1[0])
-            ann_copy["img1_y"] = float(p1[1])
-            ann_copy["radius"] = max(2.0, float(ann_copy.get("radius", 20.0)) * radius_scale)
-            imported.append(ann_copy)
-
-        for colour, label in state["source_colour_labels"].items():
-            self.colour_labels.setdefault(colour, label)
-        self.annotations.extend(imported)
-        imported_count = len(imported)
-
-        win = state.get("win")
-        self._annotation_import = None
-        if win is not None and win.winfo_exists():
-            win.destroy()
+        old_noise, old_develop = dict(pair.nr[idx]), dict(pair.develop[idx])
+        if isinstance(develop, dict):
+            # A preset carries the look, never which files an image is built from.
+            develop = dict(pair.develop[idx], exposure=develop.get("exposure", 0.0),
+                           noise=develop.get("noise", "standard"))
+        self._checkpoint("Load image settings")
+        pair.apply_adjust_records(replaced(pair.adjust, adjust))
+        pair.apply_nr_records(replaced(pair.nr, noise))
+        pair.apply_develop_records(replaced(pair.develop, develop))
+        self._sync_controls()
         self._schedule_render()
-        self.status_var.set(
-            f"Imported {imported_count} annotation(s) from {state['path']}."
-        )
+        note = "" if saved_for in (None, kind) else f"  Note: they were saved from a {saved_for} image."
+        self.set_status(f"Loaded settings from {os.path.basename(path)} onto the "
+                        f"{self._image_label(idx, row).lower()}.{note}")
+        if not pair.has_image(idx):
+            return
+        if is_raw(pair.paths[idx]) and pair.develop[idx] != old_develop:
+            self.redevelop_image(idx, row)          # also applies the extra noise reduction
+        elif pair.nr[idx] != old_noise:
+            self.apply_noise_reduction(idx, row)

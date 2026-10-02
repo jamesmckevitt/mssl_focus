@@ -1,137 +1,206 @@
+import os
+import time
 import tkinter as tk
 
 from .annotations import AnnotationMixin
-from .crop import CropMixin
+from .config import Config
+from .detection_ui import DetectMixin
+from .export import ExportMixin
+from .help import show_guide
 from .metadata import APP_AUTHOR, APP_EMAIL, APP_INSTITUTION, APP_VERSION
+from .pair import ImagePair
 from .session import SessionMixin
+from .theme import apply_theme
+from .tools import ToolsMixin
 from .ui import UIBuilderMixin
 from .viewer import ViewerMixin
+from .window_icon import set_app_icon
 
 
 __author__ = APP_AUTHOR
 __institution__ = APP_INSTITUTION
 __email__ = APP_EMAIL
 
+APP_TITLE = "MSSL FOCUS"
+UNDO_LIMIT = 200
+COALESCE_SECONDS = 1.5
 
-class ImageComparer(CropMixin, SessionMixin, AnnotationMixin, ViewerMixin, UIBuilderMixin):
-    def __init__(self, root):
+
+class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, ToolsMixin, ViewerMixin,
+                    UIBuilderMixin):
+    def __init__(self, root, config=None):
         self.root = root
-        self.root.title("MSSL FOCUS - Filter Optical Characterisation Utility Software")
-        self.root.geometry("1400x900")
-        self.root.configure(bg="#2b2b2b")
-        self._set_app_icon()
+        self.config = config if config is not None else Config()
+        self.fonts, self.ui_scale = apply_theme(root)
+        set_app_icon(root)
 
-        self.images = [None, None]
-        self.image_paths = [None, None]
-        self.preview_images = [None, None]
-        self.preview_scales = [1.0, 1.0]
-        self.photos = [None, None]
-
-        self.compare_row_images = [None, None]
-        self.compare_row_image_paths = [None, None]
-        self.compare_row_preview_images = [None, None]
-        self.compare_row_preview_scales = [1.0, 1.0]
-        self.compare_row_photos = [None, None]
-
+        # Row 0 is the inspection being worked on; row 1 an optional reference inspection.
+        self.pairs = [ImagePair(), ImagePair()]
+        self.row_shift = {"x": 0.0, "y": 0.0, "rot": 0.0, "scale": 1.0}
         self.zoom = 1.0
-        self.pan_x = 0
-        self.pan_y = 0
-        self.offset_x = 0
-        self.offset_y = 0
-        self.rotation = 0.0
-        self.opacity = 0.5
-        self.cursor_pos = (0, 0)
-        self.last_pan = (0, 0)
-        self._render_pending = False
-        self._interacting = False
-        self._quality_timer = None
-        self._rotated_cache = [None, None]
-        self._last_rot = [None, None]
-        self._rotated_preview_cache = [None, None]
-        self._last_rot_preview = [None, None]
-        self._compare_row_rotated_cache = [None, None]
-        self._compare_row_last_rot = [None, None]
-        self._compare_row_rotated_preview_cache = [None, None]
-        self._compare_row_last_rot_preview = [None, None]
+        self.pan_x = 0.0
+        self.pan_y = 0.0
 
-        self.annotations = []
+        self.session_path = None
+        self.dirty = False
         self.annot_colour = "#ff0000"
-        self.colour_labels = {}
 
-        self._level_start = None
-        self._align_pts_img1 = []
-        self._align_pts_img2 = []
-        self._compare_row_align_pts_img1 = []
-        self._compare_row_align_pts_img2 = []
-        self._row_align_pts_top = []
-        self._row_align_pts_bottom = []
-        self._align_guide_cursor = None
-        self._compare_row_align_guide_cursor = None
-        self._crop_corner1 = None
-        self._annotation_import = None
-        self._drag_annotation_index = None
-        self._nr_progress_dialog = None
+        self._undo_stack = []
+        self._redo_stack = []
+        self._last_checkpoint = (None, 0.0)
 
-        self.annot_label_size_var = tk.IntVar(value=16)
-        self.canvas_legend_size_var = tk.IntVar(value=13)
+        self._busy = False
+        self._syncing = False
+        self._interacting = False
+        self._render_job = None
+        self._quality_job = None
+        self._refit_job = None
+        self._view_is_fit = True
+        self._press = None
+        self._hover = None
+        self._tool_point_order = []
+        self._legend_fonts = {}
+        self._badge_font = None
+        self._candidates = []
+        self._candidate_index = 0
+        self._candidate_summary = {}
+        self._outline_rect = None
+        self._outline_built = None
+        self._outline_redraw = False
+        self._detection = None
+        self._rejected = set()
+        self._pending_key = None
+        self._tool_state = {"row": None, "a": [], "b": [], "cur": [], "ref": []}
 
-        self._base_images = [None, None]
-        self._compare_row_base_images = [None, None]
-        self.nr_amount_vars = [tk.IntVar(value=0), tk.IntVar(value=0)]
-        self.nr_aggressive_vars = [tk.BooleanVar(value=False), tk.BooleanVar(value=False)]
-        self.nr_color_vars = [tk.IntVar(value=50), tk.IntVar(value=50)]
-        self.nr_edge_vars = [tk.IntVar(value=100), tk.IntVar(value=100)]
-        self.compare_row_nr_amount_vars = [tk.IntVar(value=0), tk.IntVar(value=0)]
-        self.compare_row_nr_aggressive_vars = [tk.BooleanVar(value=False), tk.BooleanVar(value=False)]
-        self.compare_row_nr_color_vars = [tk.IntVar(value=50), tk.IntVar(value=50)]
-        self.compare_row_nr_edge_vars = [tk.IntVar(value=100), tk.IntVar(value=100)]
-
-        self.adj_vars = [
-            {
-                "brightness": tk.DoubleVar(value=1.0),
-                "contrast": tk.DoubleVar(value=1.0),
-                "blacks": tk.DoubleVar(value=0.0),
-                "whites": tk.DoubleVar(value=255.0),
-            },
-            {
-                "brightness": tk.DoubleVar(value=1.0),
-                "contrast": tk.DoubleVar(value=1.0),
-                "blacks": tk.DoubleVar(value=0.0),
-                "whites": tk.DoubleVar(value=255.0),
-            },
-        ]
-
-        self.compare_row_adj_vars = [
-            {
-                "brightness": tk.DoubleVar(value=1.0),
-                "contrast": tk.DoubleVar(value=1.0),
-                "blacks": tk.DoubleVar(value=0.0),
-                "whites": tk.DoubleVar(value=255.0),
-            },
-            {
-                "brightness": tk.DoubleVar(value=1.0),
-                "contrast": tk.DoubleVar(value=1.0),
-                "blacks": tk.DoubleVar(value=0.0),
-                "whites": tk.DoubleVar(value=255.0),
-            },
-        ]
-
-        self.show_compare_row_var = tk.BooleanVar(value=False)
-        self.compare_row_off_x_var = tk.StringVar(value="0")
-        self.compare_row_off_y_var = tk.StringVar(value="0")
-        self.compare_row_rot_var = tk.StringVar(value="0.0")
-        self.compare_row_img2_scale_var = tk.StringVar(value="1.000")
-        self.compare_row_glob_rot_var = tk.StringVar(value="0.0")
-        self.compare_row_shift_x_var = tk.StringVar(value="0")
-        self.compare_row_shift_y_var = tk.StringVar(value="0")
-        self.compare_row_shift_rot_var = tk.StringVar(value="0.0")
-        self.compare_row_shift_scale_var = tk.StringVar(value="1.000")
-        self.compare_row_align_mode_var = tk.BooleanVar(value=False)
-        self.compare_row_align_scale_mode_var = tk.BooleanVar(value=False)
-        self.row_align_mode_var = tk.BooleanVar(value=False)
-        self.row_align_scale_mode_var = tk.BooleanVar(value=False)
-
+        self._restore_window()
         self._build_ui()
+        self._layout_panes()
+        self._sync_controls()
+        self._update_title()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if self.config.get("show_guide_at_start", True):
+            self.root.after(400, lambda: show_guide(self))
+
+    # ------------------------------------------------------------------ #
+    # Window
+    # ------------------------------------------------------------------ #
+
+    def _restore_window(self):
+        screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        width = min(int(1500 * self.ui_scale), screen_w - 80)
+        height = min(int(950 * self.ui_scale), screen_h - 120)
+        self.root.geometry(f"{width}x{height}+{(screen_w - width) // 2}+{max(0, (screen_h - height) // 3)}")
+        self.root.minsize(int(900 * self.ui_scale), int(560 * self.ui_scale))
+        if self.config.get("maximised", False):
+            try:
+                self.root.state("zoomed")
+            except tk.TclError:
+                pass
+
+    def _update_title(self):
+        name = os.path.basename(self.session_path) if self.session_path else "Untitled session"
+        label = self.pairs[0].label
+        where = f"  ({label})" if label and self.session_path else ""
+        self.root.title(f"{'* ' if self.dirty else ''}{name}{where}  -  {APP_TITLE}")
+
+    def _on_close(self):
+        if self._busy:
+            return
+        if not self._confirm_discard("exit"):
+            return
+        try:
+            self.config.set("maximised", self.root.state() == "zoomed")
+        except tk.TclError:
+            pass
+        self.root.destroy()
+
+    # ------------------------------------------------------------------ #
+    # State changes, undo and redo
+    # ------------------------------------------------------------------ #
+
+    def _new_pair(self, row):
+        self.pairs[row] = ImagePair()
+
+    def _reset_state(self):
+        """Back to an empty session."""
+        self.pairs = [ImagePair(), ImagePair()]
+        self.reset_row_shift()
+        self.zoom, self.pan_x, self.pan_y = 1.0, 0.0, 0.0
+        self._view_is_fit = True
+        self.session_path = None
+        self.dirty = False
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self.show_reference_var.set(False)
+        self.mode_var.set("sidebyside")
+        self.opacity_var.set(0.5)
+        self.control_row_var.set(0)
+        self.tool_var.set("pan")
+        self._on_tool_changed()
+        self._update_zoom_readout()
+        self._update_title()
+        self._layout_panes()
+        self._sync_controls()
+
+    def _snapshot(self):
+        return {
+            "pairs": [pair.snapshot() for pair in self.pairs],
+            "row_shift": dict(self.row_shift),
+        }
+
+    def _restore(self, snap):
+        for pair, pair_snap in zip(self.pairs, snap["pairs"]):
+            pair.restore(pair_snap)
+        self.row_shift = dict(snap["row_shift"])
+
+    def _mark_dirty(self):
+        if not self.dirty:
+            self.dirty = True
+            self._update_title()
+
+    def _checkpoint(self, label, coalesce=None):
+        """Record the state before a change so it can be undone.
+
+        Rapid repeats of the same adjustment (a slider drag, held arrow key)
+        collapse into a single undo step.
+        """
+        now = time.monotonic()
+        last_key, last_time = self._last_checkpoint
+        self._last_checkpoint = (coalesce, now)
+        self._mark_dirty()
+        if coalesce is not None and coalesce == last_key and now - last_time < COALESCE_SECONDS:
+            return
+        self._undo_stack.append((label, self._snapshot()))
+        del self._undo_stack[:-UNDO_LIMIT]
+        self._redo_stack.clear()
+        self._update_undo_buttons()
+
+    def _step_history(self, source, target, verb):
+        if not source or self._busy:
+            return
+        label, snap = source.pop()
+        target.append((label, self._snapshot()))
+        self._restore(snap)
+        self._last_checkpoint = (None, 0.0)
+        self._mark_dirty()
+        self._clear_tool_points(redraw=False)
+        self._sync_controls()
+        self._schedule_render()
+        self.set_status(f"{verb}: {label}")
+        if self.tool_var.get() in ("detect", "review"):   # the search area may have changed
+            self._prepare_detect_tool()
+            self._update_cursor()
+            self._ensure_search()
+
+    def undo(self):
+        self._step_history(self._undo_stack, self._redo_stack, "Undid")
+
+    def redo(self):
+        self._step_history(self._redo_stack, self._undo_stack, "Redid")
+
+    def _update_undo_buttons(self):
+        self.undo_button.state(["!disabled"] if self._undo_stack else ["disabled"])
+        self.redo_button.state(["!disabled"] if self._redo_stack else ["disabled"])
 
 
 __all__ = ["APP_VERSION", "ImageComparer", "__author__", "__email__", "__institution__"]

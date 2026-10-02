@@ -16,3 +16,12 @@ __pycache__/
 *.ARW
 src/license.py
 keygen.py
+.venv/
+.pytest_cache/
+_version.txt
+app.ico
+app.png
+file_version_info.txt
+build/
+dist/
+*.spec

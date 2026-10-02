@@ -8,6 +8,7 @@ from tkinter import colorchooser, messagebox, ttk
 
 from . import geometry as geo
 from . import theme
+from .camera import describe_camera
 from .constants import _PRESET_COLOURS
 from .pair import BACKLIT, FRONTLIT, marker_text
 from .viewer import CURRENT, REFERENCE
@@ -390,10 +391,21 @@ class AnnotationMixin:
             parts.append(pair.label)
         parts.extend(files[:1] if not overlay else [" + ".join(files)] if files else [])
         text = "   |   ".join(parts)
+        # Second line: how the photograph was taken.
+        if overlay:
+            camera_lines = [f"{name}:  {describe_camera(pair.camera[i])}"
+                            for i, name in ((BACKLIT, "Backlit"), (FRONTLIT, "Frontlit")) if pair.camera[i]]
+        else:
+            camera_lines = [describe_camera(pair.camera[pane.idx])] if pair.camera[pane.idx] else []
         pad = self.px(5)
         item = canvas.create_text(self.px(8) + pad, self.px(8) + pad, anchor=tk.NW, text=text, fill=colour,
                                   font=self.fonts["bold"], tags="hud")
-        x0, y0, x1, y1 = canvas.bbox(item)
+        items = [item]
+        if camera_lines:
+            below = canvas.bbox(item)[3] + self.px(2)
+            items.append(canvas.create_text(self.px(8) + pad, below, anchor=tk.NW, text="\n".join(camera_lines),
+                                            fill=theme.TEXT, font=self.fonts["small"], tags="hud"))
+        x0, y0, x1, y1 = canvas.bbox(*items)
         back = canvas.create_rectangle(x0 - pad, y0 - pad, x1 + pad, y1 + pad, fill="#101010",
                                        outline="#333333", tags="hud")
         canvas.tag_lower(back, item)

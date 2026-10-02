@@ -7,11 +7,10 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from . import geometry as geo
+from .camera import RAW_EXTENSIONS, read_camera_info
 
 # Inspection images are large on purpose.
 Image.MAX_IMAGE_PIXELS = None
-
-RAW_EXTENSIONS = {'.arw', '.nef', '.cr2', '.cr3', '.orf', '.rw2', '.dng', '.raf', '.pef', '.srw'}
 
 IMAGE_FILETYPES = [
     ("Image files",
@@ -137,8 +136,15 @@ def open_image(path, develop=None, dark_field=False):
     """Open a standard or camera RAW image as a fully loaded 8-bit PIL image.
 
     ``develop`` holds the RAW development settings (see ``RAW_DEVELOP_DEFAULTS``);
-    it is ignored for ordinary image files.
+    it is ignored for ordinary image files.  The camera's exposure settings, where
+    the file records them, are returned in ``image.info["camera"]``.
     """
+    image = _open_pixels(path, develop, dark_field)
+    image.info["camera"] = read_camera_info(path)
+    return image
+
+
+def _open_pixels(path, develop, dark_field):
     if is_raw(path):
         settings = dict(RAW_DEVELOP_DEFAULTS)
         settings.update(develop or {})

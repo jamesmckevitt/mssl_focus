@@ -14,7 +14,11 @@ GUIDE = [
         "- Click the empty Backlit panel and choose the backlit file, then do the same for Frontlit.",
         "- TIFF, PNG, JPEG and camera RAW files (ARW, NEF, CR2, DNG, ...) all work.",
         "- Under 'Brightness, contrast and noise' each slider has a box for typing an exact value, "
-        "and Save settings / Load settings keep one look for all backlit (or frontlit) images.",
+        "and Save settings / Load settings keep one look for all backlit (or frontlit) images.  "
+        "Loading shows the camera settings the look was saved with, and warns if this image was "
+        "taken differently.",
+        "- Under each panel's title is how that photograph was taken: aperture, exposure time, ISO, "
+        "focal length and camera.",
         "- Camera RAW files can be loaded as they are, with no conversion step.  A backlit RAW "
         "frame is developed for dark-field viewing: the noise floor becomes black and pinholes are "
         "brightened.  Exposure and noise reduction are under 'Brightness, contrast and noise'.",

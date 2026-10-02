@@ -52,6 +52,7 @@ class ImagePair:
         self.adjust = [dict(ADJUST_DEFAULTS), dict(ADJUST_DEFAULTS)]
         self.nr = [dict(NR_DEFAULTS), dict(NR_DEFAULTS)]
         self.develop = [dict(RAW_DEVELOP_DEFAULTS), dict(RAW_DEVELOP_DEFAULTS)]   # camera RAW files only
+        self.camera = [{}, {}]            # exposure settings read from each file
         self.annotations = []
         self.colour_labels = {}
         self.label_prefixes = {}
@@ -82,6 +83,7 @@ class ImagePair:
         self.paths[idx] = path
         self.base_images[idx] = base_image
         self.pyramids[idx] = pyramid
+        self.camera[idx] = dict(getattr(base_image, "info", {}).get("camera") or {})
 
     def lut(self, idx):
         pyramid = self.pyramids[idx]

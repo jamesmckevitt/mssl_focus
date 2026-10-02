@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import theme
+from .camera import camera_differences, describe_camera, exposure_stops
 from .imaging import IMAGE_FILETYPES, is_raw
 from .metadata import APP_VERSION
 from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
@@ -161,6 +162,7 @@ class SessionMixin:
             "adjustments": [dict(a) for a in current.adjust],
             "noise_reduction": [dict(n) for n in current.nr],
             "raw_develop": [dict(d) for d in current.develop],
+            "camera_settings": [dict(c) for c in current.camera],
             "compare_row_enabled": bool(self.show_reference_var.get() and reference.has_any_image()),
             "compare_image_paths": list(reference.paths),
             "compare_image_paths_rel": [relative_to(p, session_dir) for p in reference.paths],
@@ -174,6 +176,7 @@ class SessionMixin:
             "compare_adjustments": [dict(a) for a in reference.adjust],
             "compare_noise_reduction": [dict(n) for n in reference.nr],
             "compare_raw_develop": [dict(d) for d in reference.develop],
+            "compare_camera_settings": [dict(c) for c in reference.camera],
             "compare_annotations": [normalise_annotation(a) for a in reference.annotations],
             "compare_colour_labels": dict(reference.colour_labels),
             "compare_label": reference.label,
@@ -493,6 +496,8 @@ class SessionMixin:
             "adjust": dict(pair.adjust[idx]),
             "noise_reduction": dict(pair.nr[idx]),
             "raw_develop": dict(pair.develop[idx]),
+            "camera": dict(pair.camera[idx]),
+            "saved_from": os.path.basename(pair.paths[idx]) if pair.paths[idx] else None,
         }
         try:
             write_session(path, record)
@@ -503,6 +508,42 @@ class SessionMixin:
         self._remember_dir(path)
         self.set_status(f"Saved {kind} image settings: {path}")
         return path
+
+    def _confirm_settings_camera(self, title, path, saved_for, saved_camera, row, idx):
+        """Tell the user which camera settings the saved look was made for, and whether the
+        image it is about to be applied to was taken differently.  False cancels the load."""
+        pair = self.pairs[row]
+        kind = "backlit" if idx == BACKLIT else "frontlit"
+        saved_camera = saved_camera if isinstance(saved_camera, dict) else {}
+        target_camera = pair.camera[idx]
+        lines = [
+            f"Settings from:  {os.path.basename(path)}",
+            "",
+            f"Saved from a {saved_for or 'previous'} image taken at:",
+            f"    {describe_camera(saved_camera) or 'camera settings not recorded'}",
+            f"Applying to the {self._image_label(idx, row).lower()}, taken at:",
+            f"    {describe_camera(target_camera) or 'camera settings not known'}",
+            "",
+        ]
+        differences = camera_differences(saved_camera, target_camera)
+        warn = bool(differences) or saved_for not in (None, kind)
+        if saved_for not in (None, kind):
+            lines.append(f"Note: these settings were saved from a {saved_for} image, and this is a {kind} image.")
+        if differences:
+            lines.append("The camera settings are different:")
+            lines.extend(f"    {difference}" for difference in differences)
+            stops = exposure_stops(saved_camera, target_camera)
+            if stops is not None and abs(stops) >= 0.05:
+                lines.append(f"This image received about {abs(stops):.1f} stops "
+                             f"{'more' if stops > 0 else 'less'} light, so the same brightness and "
+                             "contrast may not give the same look.")
+            elif stops is not None:
+                lines.append("Overall the exposure is almost the same, so the look should carry over.")
+        elif saved_camera and target_camera:
+            lines.append("The aperture, exposure time and ISO are the same.")
+        lines.extend(["", "Apply the settings anyway?" if warn else "Apply the settings?"])
+        return messagebox.askokcancel(title, "\n".join(lines), icon="warning" if warn else "question",
+                                      parent=self.root)
 
     def load_image_settings(self, path=None):
         """Apply saved settings -- from a settings file or a session -- to the selected image."""
@@ -523,6 +564,7 @@ class SessionMixin:
         if data.get("type") == SETTINGS_FILE_TYPE:
             adjust, noise, develop = data.get("adjust"), data.get("noise_reduction"), data.get("raw_develop")
             saved_for = data.get("image")
+            saved_camera = data.get("camera")
         elif "adjustments" in data:
             # A session file: take the settings of its image of the same kind.
             def pick(key):
@@ -530,8 +572,12 @@ class SessionMixin:
                 return values[idx] if isinstance(values, list) and idx < len(values) else None
             adjust, noise, develop = pick("adjustments"), pick("noise_reduction"), pick("raw_develop")
             saved_for = kind
+            saved_camera = pick("camera_settings")
         else:
             messagebox.showinfo(title, "That file does not contain image settings.", parent=self.root)
+            return
+
+        if not self._confirm_settings_camera(title, path, saved_for, saved_camera, row, idx):
             return
 
         def replaced(current, new):

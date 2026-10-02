@@ -50,10 +50,16 @@ def app(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: True)
     monkeypatch.setattr(messagebox, "askyesnocancel", lambda *a, **k: False)
     monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: None)
+    confirmations = []
+    answers = {"ok": True}
+    monkeypatch.setattr(messagebox, "askokcancel",
+                        lambda title, message, **k: (confirmations.append(message), answers["ok"])[1])
     shown_errors = []
     monkeypatch.setattr(messagebox, "showerror", lambda *a, **k: shown_errors.append(a))
     application = ImageComparer(root, config=config)
     application.shown_errors = shown_errors
+    application.confirmations = confirmations
+    application.confirm_answers = answers
     application._ask_colour_details = lambda colour: ("Pinholes", "P")
     root.geometry("1300x800+40+40")
     wait_idle(application)
@@ -635,3 +641,69 @@ def test_matching_direction_and_scope_can_be_chosen(app, tmp_path):
     assert after[2] == pytest.approx(1 / 0.6, abs=0.1)
     assert [after[0], after[1], after[3]] == [1.0, 1.0, 1.0], "only the reference backlit image changes"
     assert app.adjust_target_var.get() == "Reference backlit image"
+
+
+def test_panels_show_how_each_photo_was_taken(app, tmp_path):
+    from tests.test_camera import save_with_exif
+
+    app.load_image_path(str(save_with_exif(tmp_path / "back.jpg", 8, (10, 1))), BACKLIT)
+    wait_idle(app)
+    app.load_image_path(str(save_with_exif(tmp_path / "front.jpg", 9, (1, 4))), FRONTLIT)
+    wait_idle(app)
+
+    def badge(idx):
+        canvas = pane(app, 0, idx).canvas
+        return [canvas.itemcget(item, "text") for item in canvas.find_withtag("hud")
+                if canvas.type(item) == "text"]
+
+    assert "f/8  |  10 s  |  ISO 2000  |  30 mm  |  ILCE-6400" in badge(BACKLIT)
+    assert "f/9  |  1/4 s  |  ISO 2000  |  30 mm  |  ILCE-6400" in badge(FRONTLIT)
+    app.mode_var.set("overlay")
+    app._on_mode_change()
+    wait_idle(app)
+    overlay = "\n".join(badge(BACKLIT))
+    assert "Backlit:  f/8" in overlay and "Frontlit:  f/9" in overlay
+
+
+def test_loading_settings_reports_the_camera_they_were_saved_with(app, tmp_path, monkeypatch):
+    from tests.test_camera import save_with_exif
+
+    app.load_image_path(str(save_with_exif(tmp_path / "front_a.jpg", 8, (1, 5))), FRONTLIT)
+    wait_idle(app)
+    app.adjust_target_var.set("Frontlit image")
+    app._sync_controls()
+    app.pairs[0].adjust[FRONTLIT]["brightness"] = 1.5
+    preset = tmp_path / "frontlit_settings.json"
+    monkeypatch.setattr(filedialog, "asksaveasfilename", lambda **k: str(preset))
+    app.save_image_settings()
+    saved = read_session(preset)
+    assert saved["camera"]["f_number"] == 8.0 and saved["camera"]["exposure_time"] == 0.2
+    assert saved["saved_from"] == "front_a.jpg"
+
+    # Same camera settings: the user is told so.
+    app.pairs[0].adjust[FRONTLIT]["brightness"] = 1.0
+    app.load_image_settings(str(preset))
+    wait_idle(app)
+    message = app.confirmations[-1]
+    assert "f/8  |  1/5 s  |  ISO 2000" in message
+    assert "are the same" in message and "different" not in message
+    assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.5
+
+    # A photo taken differently: the differences are listed, and declining changes nothing.
+    app.new_session()
+    app.load_image_path(str(save_with_exif(tmp_path / "front_b.jpg", 9, (1, 4))), FRONTLIT)
+    wait_idle(app)
+    app.adjust_target_var.set("Frontlit image")
+    app._sync_controls()
+    app.confirm_answers["ok"] = False
+    app.load_image_settings(str(preset))
+    wait_idle(app)
+    message = app.confirmations[-1]
+    assert "aperture f/8 then, f/9 now" in message
+    assert "exposure time 1/5 s then, 1/4 s now" in message
+    assert "almost the same" in message
+    assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.0, "declined: nothing applied"
+    app.confirm_answers["ok"] = True
+    app.load_image_settings(str(preset))
+    wait_idle(app)
+    assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.5

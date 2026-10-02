@@ -198,7 +198,9 @@ class Pyramid:
         level_matrix = matrix @ geo.scaling(2 ** level_index)
         inv = geo.invert(level_matrix)
         coefficients = (inv[0, 0], inv[0, 1], inv[0, 2], inv[1, 0], inv[1, 1], inv[1, 2])
-        resample = Image.Resampling.BICUBIC if quality else Image.Resampling.BILINEAR
+        # While the view is moving, speed matters more than smoothness; the
+        # pre-averaged level already keeps small bright spots from dropping out.
+        resample = Image.Resampling.BICUBIC if quality else Image.Resampling.NEAREST
         fill = CANVAS_BACKGROUND[0] if level.mode == "L" else CANVAS_BACKGROUND
         frame = level.transform(
             (width, height), Image.Transform.AFFINE, coefficients,

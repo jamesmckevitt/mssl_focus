@@ -84,7 +84,7 @@ class DetectMixin:
             self._candidates = fresh
             self._candidate_index = 0
             self._candidate_summary = {
-                "found": len(found), "marked": len(marked), "truncated": total > len(found) + 0,
+                "found": len(found), "marked": len(marked),
                 "new": sum(1 for c in fresh if not c["in_reference"]), "with_reference": with_reference,
             }
             if not fresh:

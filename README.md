@@ -19,19 +19,23 @@ No Python required, the executables are fully self-contained.
 
 ## Features
 
-- Side-by-side and blended overlay view modes
-- Pan, zoom, and per-image/global rotation
-- Point-based image alignment with guided circle indicator
-- Annotation circles with optional floating labels
+- Side-by-side and blended overlay views of a backlit / frontlit image pair, with linked pan and zoom
+- A reference row showing an earlier inspection of the same filter, aligned to the current one, for before / after comparison
+- Guided tools: level (make the filter upright), align by matching points (with a residual estimate), annotate, move, crop export
+- Camera RAW files (ARW, NEF, CR2, DNG, ...) developed directly, with dark-field treatment and noise reduction for backlit frames
+- Automatic pinhole search, with a review step; spots that are new since the reference inspection are shown first
+- Annotation markers with automatic numbering per colour, a legend with counts, undo / redo
 - Brightness / contrast / blacks / whites adjustment per image
-- Crop export - select a canvas region to export a high-resolution side-by-side PNG
-- Session save/load - persist all settings, alignment, and annotations to a `.json` file
+- Export of a region or the whole view at full resolution, with markers, legend and date stamp
+- Sessions saved to a `.json` file that still opens after its folder is moved or renamed
+
+Press **F1** in the application for a step-by-step guide.
 
 ## Access and Licensing
 
 This software is copyright (c) 2026 James McKevitt, UCL Mullard Space Science Laboratory. All rights reserved.
 
-MSSL FOCUS requires a valid license file (`license.dat`) to run. On startup you will be asked to locate your license file, or enter a master password.
+MSSL FOCUS requires a valid license file (`license.dat`) to run. The first time it starts you will be asked to locate your license file, or enter a master password. The file is remembered and re-checked on later starts; a `license*.dat` placed beside the program is picked up automatically.
 
 To request a license, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).
 
@@ -40,4 +44,10 @@ To request a license, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).
 The software can be run directly from source, when `src/license.py` is present, using:
 ```bash
 python -m src
+```
+
+The automated tests need a display but not the license module:
+```bash
+pip install -e .[test]
+python -m pytest tests
 ```

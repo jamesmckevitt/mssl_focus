@@ -204,6 +204,9 @@ class ViewerMixin:
             if frame is None:
                 pane.photo = None
                 canvas.itemconfig(pane.image_item, image="")
+            elif pane.photo is not None and (pane.photo.width(), pane.photo.height()) == frame.size:
+                pane.photo.paste(frame)   # much cheaper than building a new Tk image
+                canvas.itemconfig(pane.image_item, image=pane.photo)
             else:
                 pane.photo = ImageTk.PhotoImage(frame)
                 canvas.itemconfig(pane.image_item, image=pane.photo)

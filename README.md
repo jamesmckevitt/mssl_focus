@@ -28,8 +28,27 @@ No Python required, the executables are fully self-contained.
 - Brightness / contrast / blacks / whites adjustment per image
 - Export of a region or the whole view at full resolution, with markers, legend and date stamp
 - Sessions saved to a `.json` file that still opens after its folder is moved or renamed
+- A history file per filter that stacks its inspections (see below)
 
 Press **F1** in the application for a step-by-step guide.
+
+## Filter histories and the command line
+
+A filter's history (for example `em2.json`) holds every inspection of that filter in order, and every pinhole ever found in it with a permanent ID (`I3`, `S1`, ...), the inspection it first appeared in, and whether it was accepted or rejected. Pinholes are kept in filter coordinates, so they carry across inspections, and a spot rejected once is skipped when it is found again. The application opens a history like a session (pick the inspection) and saves changes back into it.
+
+Everything else runs headless; a history is named by its file or, for `<name>.json` in the current folder, by the filter's name:
+
+```bash
+python mssl_focus.py migrate incoming.json shock.json -o em2.json   # sessions, oldest first
+python mssl_focus.py add em2 thermal back.TIF front.TIF              # aligns it automatically
+python mssl_focus.py detect em2 thermal                              # sensitivity 75 unless --sensitivity
+python mssl_focus.py reject em2 T4 T7                                # or: accept em2 T7
+python mssl_focus.py show em2 --pinholes
+python mssl_focus.py export em2 --inspection thermal -o map.png      # everything known up to it
+python mssl_focus.py export SESSION.json -o map.png                  # a single session, as before
+```
+
+Adding an inspection lines the frontlit photograph up on the backlit one, turns the filter upright by its frame, finds the outline of the membrane from the frame's opening, and places the inspection on the filter using the pinholes already known. Run any command with `-h` for its options.
 
 ## Access and Licensing
 

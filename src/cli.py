@@ -4,7 +4,8 @@
     python mssl_focus.py export em2 --inspection thermal -o map.png
 
     python mssl_focus.py migrate SESSION.json ... -o em2.json
-    python mssl_focus.py add em2 thermal back.TIF front.TIF
+    python mssl_focus.py photos 5_thermal_test/em2
+    python mssl_focus.py add em2 thermal 5_thermal_test/em2
     python mssl_focus.py detect em2 thermal
     python mssl_focus.py reject em2 T4 T7
     python mssl_focus.py accept em2 T7
@@ -28,7 +29,8 @@ from .pair import BACKLIT, FRONTLIT, ImagePair
 from .session_data import (fill_pair_from_session, read_session, resolve_frame_paths,
                            session_image_paths, shift_legacy_raw_markers)
 
-COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate")
+COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate", "photos",
+            "replace-photos", "remove")
 
 
 def _say(message, quiet=False):
@@ -93,6 +95,37 @@ def _inspection_images(history, index, history_file, quiet=False):
     if images[BACKLIT] is None:
         raise SystemExit(f"inspection {insp['id']} has no backlit image")
     return images
+
+
+NOISY_SPOTS = 300    # in the middle of a backlit image: clean ones offer up to about 150 spots, noisy thousands
+
+
+def _settle_development(history, index, history_file, quiet=False):
+    """Develop a RAW backlit photograph darker if the standard stretch turns its
+    sensor noise into spots.  A frame with little bright in it gets a strong
+    stretch, and on some (EM4's shock test) that floods the search with
+    thousands of candidates; a stop or two darker leaves the pinholes and loses
+    the noise.  The setting is kept with the inspection, so the window shows the
+    same image."""
+    from .imaging import default_develop, is_raw
+    from .session_data import develop_record
+    insp = history["inspections"][index]
+    resolved, _saved = hist.image_paths(insp, history_file)
+    back = resolved[BACKLIT]
+    if not back or not is_raw(back):
+        return
+    develop = default_develop()
+    for _step in range(5):
+        count = hist.crowded_spots(open_image(back, develop=develop, dark_field=True))
+        if count <= NOISY_SPOTS:
+            break
+        _say(f"  {count} candidate spots at {develop['exposure']:+g} stops: sensor noise; developing darker", quiet)
+        develop["exposure"] -= 1.0
+    if develop["exposure"]:
+        base = Path(history_file).resolve().parent
+        insp["raw_develop"] = [develop_record(develop, base), develop_record(default_develop(), base)]
+        print(f"{insp['id']}: backlit developed {develop['exposure']:+g} stops, as the standard stretch "
+              "made its noise look like pinholes")
 
 
 # --------------------------------------------------------------------------- #
@@ -277,15 +310,40 @@ def _print_detection(insp, summary, added):
         print("  replaced earlier detections: " + " ".join(summary["replaced"]))
 
 
+def _photo_paths(source, frontlit=None, quiet=False):
+    """The backlit and frontlit photographs: as given, or chosen from a folder."""
+    if not Path(source).is_dir():
+        return source, frontlit
+    if frontlit:
+        raise SystemExit("give either a folder or two photographs, not both")
+    from . import photos
+    back, front, shots = photos.choose_in(source)
+    if not quiet:
+        print(f"photographs chosen in {source}:")
+        for line in photos.describe(shots, back, front):
+            print(line)
+    return back, front
+
+
+def cmd_photos(args):
+    from . import photos
+    back, front, shots = photos.choose_in(args.folder)
+    for line in photos.describe(shots, back, front):
+        print(line)
+    return 0
+
+
 def cmd_add(args):
     path = hist.history_path(args.history, must_exist=False)
     history = hist.read_history(path) if path.is_file() else hist.new_history(args.filter or path.stem)
-    insp = hist.add_inspection(history, path, args.stage, args.backlit, args.frontlit,
+    backlit, frontlit = _photo_paths(args.backlit, args.frontlit, args.quiet)
+    insp = hist.add_inspection(history, path, args.stage, backlit, frontlit,
                                date=args.date, name=args.name, category_key=args.category)
     index = history["inspections"].index(insp)
     where = "" if index == len(history["inspections"]) - 1 else \
         f", before {history['inspections'][index + 1]['id']} (by date)"
     print(f"added inspection {insp['id']} ({insp['name']}, {insp['date']}) to {path}{where}")
+    _settle_development(history, index, path, args.quiet)
     if not args.no_align:
         backlit, frontlit = _align(history, index, path, args)
         if args.detect:
@@ -293,6 +351,29 @@ def cmd_add(args):
                                                     sensitivity=args.sensitivity)
             _print_detection(insp, summary, added)
     hist.write_history(path, history)
+    return 0
+
+
+def cmd_replace_photos(args):
+    path, history = _open(args.history)
+    index = hist.inspection_index(history, args.inspection)
+    backlit, frontlit = _photo_paths(args.backlit, args.frontlit, args.quiet)
+    insp = hist.replace_photos(history, path, index, backlit, frontlit)
+    _settle_development(history, index, path, args.quiet)
+    images = _inspection_images(history, index, path, quiet=args.quiet)
+    report = hist.align_inspection(history, index, *images, inset=args.inset / 100.0, refit=True)
+    _print_alignment(report)
+    hist.write_history(path, history)
+    print(f"{insp['id']} now uses {Path(backlit).name}" + (f" and {Path(frontlit).name}" if frontlit else ""))
+    return 0
+
+
+def cmd_remove(args):
+    path, history = _open(args.history)
+    insp, gone = hist.remove_inspection(history, args.inspection)
+    hist.write_history(path, history)
+    print(f"removed inspection {insp['id']}" + (f" and the {len(gone)} pinhole(s) first seen in it: "
+                                                + " ".join(gone) if gone else ""))
     return 0
 
 
@@ -417,7 +498,8 @@ def _history_parser():
     q = sub.add_parser("add", help="add an inspection from a backlit and a frontlit photograph")
     q.add_argument("history", help="history file or filter name (created if new)")
     q.add_argument("stage", help="stage: " + ", ".join(hist.STAGES))
-    q.add_argument("backlit", help="backlit photograph")
+    q.add_argument("backlit", help="backlit photograph, or a folder of RAW photographs to choose from "
+                                   "(see the photos command)")
     q.add_argument("frontlit", nargs="?", help="frontlit photograph")
     q.add_argument("--date", help="inspection date, YYYY-MM-DD (default: when the photograph was taken)")
     q.add_argument("--name", help="a name for the inspection (default: from the stage)")
@@ -428,6 +510,23 @@ def _history_parser():
     q.add_argument("--sensitivity", type=float, help="with --detect: 0-100 (default 75)")
     aligning(q)
     common(q)
+
+    q = sub.add_parser("photos", help="show which RAW photographs in a folder would be used, and why")
+    q.add_argument("folder")
+
+    q = sub.add_parser("replace-photos",
+                       help="use other photographs of an inspection (say, RAW originals) and place them "
+                            "on its known pinholes")
+    q.add_argument("history")
+    q.add_argument("inspection", help="ID, stage or number")
+    q.add_argument("backlit", help="backlit photograph, or a folder of RAW photographs to choose from")
+    q.add_argument("frontlit", nargs="?", help="frontlit photograph")
+    aligning(q)
+    common(q)
+
+    q = sub.add_parser("remove", help="remove an inspection and the pinholes first seen in it")
+    q.add_argument("history")
+    q.add_argument("inspection", help="ID, stage or number")
 
     q = sub.add_parser("align", help="align an inspection again from its photographs")
     q.add_argument("history")
@@ -470,7 +569,8 @@ def _history_parser():
 
 
 HANDLERS = {"add": cmd_add, "align": cmd_align, "detect": cmd_detect, "show": cmd_show,
-            "migrate": cmd_migrate,
+            "migrate": cmd_migrate, "photos": cmd_photos, "replace-photos": cmd_replace_photos,
+            "remove": cmd_remove,
             "accept": lambda a: _set_status(a, hist.ACCEPTED),
             "reject": lambda a: _set_status(a, hist.REJECTED)}
 
@@ -496,7 +596,7 @@ def main(argv=None):
     from .autoalign import AlignmentError
     try:
         return HANDLERS[args.command](args)
-    except (hist.HistoryError, AlignmentError, OSError) as exc:
+    except (hist.HistoryError, AlignmentError, OSError, ValueError) as exc:
         raise SystemExit(f"{args.command}: {exc}") from None
 
 

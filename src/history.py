@@ -265,6 +265,40 @@ def add_inspection(history, history_file, stage, backlit, frontlit=None, date=No
     return insp
 
 
+def replace_photos(history, history_file, index, backlit, frontlit=None):
+    """Point an inspection at other photographs of the same set-up (say, the RAW
+    originals of reprocessed copies).  Its display settings, made for the old
+    files, go back to their defaults; align it again with ``refit`` to place
+    the new photographs on its pinholes."""
+    insp = history["inspections"][index]
+    base = Path(history_file).resolve().parent
+    paths = [str(Path(p).resolve()) if p else None for p in (backlit, frontlit)]
+    for p in paths:
+        if p and not Path(p).is_file():
+            raise HistoryError(f"image not found: {p}")
+    old = insp.get("images") or {}
+    insp["images"] = _image_record(paths, base)
+    insp["replaced_images"] = [old.get("backlit"), old.get("frontlit")]
+    for key in ("adjustments", "noise_reduction", "raw_develop"):
+        insp.pop(key, None)
+    return insp
+
+
+def remove_inspection(history, ref):
+    """Remove an inspection and every pinhole first seen in it.  Returns the
+    removed inspection and the IDs of the pinholes removed with it."""
+    index = inspection_index(history, ref)
+    insp = history["inspections"].pop(index)
+    gone = [p["id"] for p in history["pinholes"] if p.get("first_seen") == insp["id"]]
+    history["pinholes"] = [p for p in history["pinholes"] if p.get("first_seen") != insp["id"]]
+    if (history.get("frame") or {}).get("reference") == insp["id"]:
+        if history["pinholes"]:
+            history["frame"]["reference"] = None
+        else:
+            history["frame"] = None
+    return insp, gone
+
+
 def _image_record(paths, base_dir):
     return {
         "backlit": paths[BACKLIT],
@@ -466,14 +500,28 @@ def find_spots(image, outline, pad=SEARCH_PAD):
     return [c for c, ok in zip(found, inside) if ok]
 
 
-def _register_on_pinholes(history, index, matrix, spots):
+def crowded_spots(image, sensitivity=None):
+    """How many candidate spots the search offers in the middle half of an image:
+    a handful to a hundred or so for a filter, thousands if noise passes for spots."""
+    from .detect import DEFAULT_SENSITIVITY, find_pinholes, minimum_score
+    width, height = image.size
+    box = (width // 4, height // 4, 3 * width // 4, 3 * height // 4)
+    found, _total = find_pinholes(image.crop(box), limit=SPOT_LIMIT)
+    floor = minimum_score(DEFAULT_SENSITIVITY if sensitivity is None else sensitivity)
+    return sum(1 for c in found if c["score"] >= floor)
+
+
+def _register_on_pinholes(history, index, matrix, spots, include_own=False):
     """Improve ``matrix`` (backlit pixels -> filter) using pinholes already known
     from earlier inspections, matched to spots found now.  Also tries the filter
-    turned half a turn, in case it was mounted the other way round.
+    turned half a turn, in case it was mounted the other way round.  With
+    ``include_own``, pinholes first seen in this inspection count too (for when
+    its photographs are replaced).
 
     Returns ``(matrix, report)``; the matrix is unchanged if too few match.
     """
-    known = [p for p in known_at(history, index - 1) if _first_seen_index(history, p) < index]
+    known = [p for p in known_at(history, index)
+             if include_own or _first_seen_index(history, p) < index]
     report = {"known": len(known), "matched": 0}
     sure = [c for c in spots if c["tier"] != "faint"] or spots
     if len(known) < 4 or len(sure) < 4:
@@ -529,12 +577,16 @@ def _register_on_pinholes(history, index, matrix, spots):
     return m, report
 
 
-def align_inspection(history, index, backlit, frontlit=None, inset=OUTLINE_INSET, keep_frontlit=False):
+def align_inspection(history, index, backlit, frontlit=None, inset=OUTLINE_INSET, keep_frontlit=False,
+                     refit=False):
     """Align an inspection from its photographs: the frontlit image onto the backlit
     one, the filter upright, its outline, and the map onto filter coordinates.
 
     ``backlit`` and ``frontlit`` are PIL images.  With ``keep_frontlit`` the stored
-    frontlit alignment is kept (as when it was set by hand).  Returns a report.
+    frontlit alignment is kept (as when it was set by hand).  With ``refit`` the
+    inspection is placed on the filter afresh from every pinhole known up to and
+    including it, as after its photographs are replaced; the reference frame
+    itself is kept.  Returns a report.
     """
     from .autoalign import AlignmentError, find_aperture, register_frontlit
     insp = history["inspections"][index]
@@ -582,7 +634,17 @@ def align_inspection(history, index, backlit, frontlit=None, inset=OUTLINE_INSET
     report["rotation"] = pair.glob_rot
 
     is_reference = frame is not None and frame.get("reference") == insp["id"]
-    if frame is None or (is_reference and not history["pinholes"]):
+    if refit and frame is not None and history["pinholes"]:
+        matrix = _frame_matrix(aperture, frame)
+        spots = find_spots(backlit, insp["outline"])
+        fitted, by_pinholes = _register_on_pinholes(history, index, matrix, spots, include_own=True)
+        if by_pinholes.get("rms") is None:
+            raise AlignmentError(f"only {by_pinholes['matched']} of {by_pinholes['known']} known pinholes "
+                                 "were found in the new photographs, too few to place them on the filter")
+        insp["to_filter"] = _store_matrix(fitted)
+        insp["registration"] = by_pinholes
+        report["registration"] = by_pinholes
+    elif frame is None or (is_reference and not history["pinholes"]):
         history["frame"] = _frame_record(aperture, insp["id"])
         insp["to_filter"] = _store_matrix(_frame_matrix(aperture))
         report["registration"] = "defines the filter frame"

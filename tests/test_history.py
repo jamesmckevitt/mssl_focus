@@ -348,3 +348,36 @@ def test_a_stage_added_late_goes_in_by_date_and_reports_what_was_already_there(t
     summary, added = hist.detect_inspection(history, index, load(back), load(front))
     assert added == [], "X1 is recognised, not found again as a shock pinhole"
     assert summary["already_here"] == ["X1"]
+
+
+def test_new_photographs_of_an_inspection_are_placed_on_its_pinholes(tmp_path):
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    back, front = write_inspection(tmp_path / "copies", PINHOLES)
+    _inspect(history, path, "incoming", back, front)
+    before = {p["id"]: (p["x"], p["y"]) for p in history["pinholes"]}
+
+    # The originals, framed a little differently from the copies first used.
+    back, front = write_inspection(tmp_path / "originals", PINHOLES, 0.6, (30, -18))
+    hist.replace_photos(history, path, 0, back, front)
+    report = hist.align_inspection(history, 0, load(back), load(front), refit=True)
+    assert report["registration"]["matched"] == len(PINHOLES)
+    insp = history["inspections"][0]
+    assert insp["images"]["backlit"].endswith("back.png") and "originals" in insp["images"]["backlit"]
+    assert {p["id"]: (p["x"], p["y"]) for p in history["pinholes"]} == before, "pinholes stay where they are"
+    for pid, true in zip(sorted(before, key=lambda k: before[k]), sorted(PINHOLES)):
+        x, y, _r = hist.image_position(insp, hist.pinhole(history, pid))
+        assert (x, y) == pytest.approx(framed_position(true, 0.6, (30, -18)), abs=1.5)
+
+
+def test_an_inspection_can_be_removed_with_its_new_pinholes(tmp_path):
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    _inspect(history, path, "incoming", back, front)
+    back, front = write_inspection(tmp_path / "shock", PINHOLES + [(700, 560)], 0.5, (5, 5))
+    _inspect(history, path, "shock", back, front)
+    insp, gone = hist.remove_inspection(history, "shock")
+    assert insp["id"] == "shock" and gone == ["S1"]
+    assert [i["id"] for i in history["inspections"]] == ["incoming"]
+    assert hist.pinhole(history, "S1") is None and hist.pinhole(history, "I1") is not None

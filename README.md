@@ -40,13 +40,18 @@ Everything else runs headless; a history is named by its file or, for `<name>.js
 
 ```bash
 python mssl_focus.py migrate incoming.json shock.json -o em2.json   # sessions, oldest first
-python mssl_focus.py add em2 thermal back.TIF front.TIF              # aligns it automatically
+python mssl_focus.py photos 5_thermal_test/em2                      # which RAW photos would be used
+python mssl_focus.py add em2 thermal 5_thermal_test/em2              # chooses them, aligns automatically
+python mssl_focus.py replace-photos em2 thermal 5_thermal_test/em2   # other photos of an inspection
+python mssl_focus.py remove em2 thermal                              # with the pinholes first seen there
 python mssl_focus.py detect em2 thermal                              # sensitivity 75 unless --sensitivity
 python mssl_focus.py reject em2 T4 T7                                # or: accept em2 T7
 python mssl_focus.py show em2 --pinholes
 python mssl_focus.py export em2 --inspection thermal -o map.png      # everything known up to it
 python mssl_focus.py export SESSION.json -o map.png                  # a single session, as before
 ```
+
+Given a folder, the photographs are chosen from its RAW files (TIFF and JPEG copies are ignored): the backlit one with the longest exposure, the latest if several share it, and the frontlit one with the exposure nearest 0.25 s, leaving out dimmer lightings, nearest in sequence to the backlit one. If the standard development turns a dark backlit frame's noise into thousands of spots, it is developed a stop or two darker, and the setting is kept with the inspection.
 
 Adding an inspection lines the frontlit photograph up on the backlit one, turns the filter upright by its frame, finds the outline of the membrane from the frame's opening, and places the inspection on the filter using the pinholes already known. Run any command with `-h` for its options.
 

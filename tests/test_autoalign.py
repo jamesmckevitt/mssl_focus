@@ -57,3 +57,9 @@ def test_a_moved_frontlit_photograph_is_put_back_on_the_backlit_one():
     for point in [OPENING[:2], (400, 150), (1100, 850)]:
         x, y = geo.apply(matrix, *framed_position(point, 0.6, (35, -22)))
         assert (x, y) == pytest.approx(point, abs=1.5)
+
+
+def test_a_faint_opening_is_still_preferred_to_the_plate_around_it():
+    # As on FM1: the membrane barely darker than the plate, the plate's outside edge strong.
+    found = autoalign.find_aperture(make_framed_filter("front", PINHOLES, 0.9, membrane=82))
+    assert (found.width, found.height) == pytest.approx(OPENING[2:4], abs=3.0)

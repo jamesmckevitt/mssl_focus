@@ -33,7 +33,12 @@ STRONG_FRACTION = 0.2     # ... and this fraction as strong as the strongest rec
 SUPPORT_SIGMAS = 4.0      # a point on a side counts as edge above this many noise levels
 MIN_SUPPORT = 0.7         # and at least this fraction of each side must be edge
 CORNER_FRACTION = 0.15    # each end of a side left out when fitting it, for the rounded corners
-SIZE_TOLERANCE = 0.12     # a known opening is looked for within this fraction of its size
+SIZE_TOLERANCE = 0.06     # a known opening is looked for within this fraction of its size
+# The opening sits centred in the frame plate, each side of it this fraction of
+# the plate's (0.81-0.82 on every filter photographed so far).  When the plate's
+# outside edge is found, the opening is looked for there first.
+OPENING_IN_PLATE = (0.75, 0.90)
+CENTRED = 0.03            # off-centre allowed, as a fraction of the plate's size
 MOVED_GAIN = 0.03         # the frontlit photograph is taken to have moved only if that fits
 MOVED_RATIO = 0.2         # the edges better by this much (absolute, and relative to not moving)
 
@@ -210,23 +215,50 @@ def _rectangle_candidates(grey):
 
 
 def _choose(candidates, noise, expect=None):
-    """The membrane's opening rather than the outside of the frame or the mount:
-    of the rectangles edged strongly all the way round, the smallest.  The
-    opening is the innermost such shape; reflections inside it are not edged
-    all the way round.  ``expect``, the size the opening is known to have
-    (``(width, height)`` in the same pixels), narrows the choice to rectangles
-    of about that size, if there are any."""
-    best_score = candidates[0][0]
-    floor = max(STRONG_SIGMAS * noise, STRONG_FRACTION * best_score)
-    strong = [c for c in candidates if c[0] >= floor and c[3] >= MIN_SUPPORT]
+    """The membrane's opening rather than the outside of the frame or the mount.
+
+    ``expect``, the size the opening is known to have (``(width, height)`` in the
+    same pixels), picks the strongest rectangle of about that size.  Otherwise,
+    if the strongest rectangle is the frame plate, the opening is the strongest
+    one centred inside it at about four-fifths of its size.  Failing both, of
+    the rectangles edged strongly all the way round the innermost is taken;
+    reflections inside the opening are not edged all the way round.
+    """
+    # Edged all the way round, well above the noise.  The opening's edge can be
+    # far fainter than the plate's outside edge (on FM1 the membrane and plate
+    # are both dark grey), so this is judged against the noise, not the plate.
+    edged = [c for c in candidates if c[0] >= STRONG_SIGMAS * noise and c[3] >= MIN_SUPPORT]
     if expect is not None:
-        sized = [c for c in (strong or candidates) if _matches_size(c[1], expect)]
-        strong = sized or strong
+        sized = [c for c in edged if _matches_size(c[1], expect)]
+        if sized:
+            return max(sized, key=lambda c: c[0])
+    if edged:
+        plate = max(edged, key=lambda c: c[0])[1]
+        inside = [c for c in edged if _centred_in(c[1], plate)]
+        if inside:
+            return max(inside, key=lambda c: c[0])
+    best_score = candidates[0][0]
+    strong = [c for c in edged if c[0] >= STRONG_FRACTION * best_score]
     if not strong:
         return candidates[0]
-    smallest = min(_area(c[1]) for c in strong)
+    return _innermost(strong)
+
+
+def _centred_in(box, plate):
+    """Whether ``box`` sits centred in ``plate`` at the opening's share of its size."""
+    pw, ph = plate[2] - plate[0], plate[3] - plate[1]
+    w, h = box[2] - box[0], box[3] - box[1]
+    low, high = OPENING_IN_PLATE
+    if not (low <= w / pw <= high and low <= h / ph <= high):
+        return False
+    return (abs((box[0] + box[2]) - (plate[0] + plate[2])) / 2.0 <= CENTRED * pw
+            and abs((box[1] + box[3]) - (plate[1] + plate[3])) / 2.0 <= CENTRED * ph)
+
+
+def _innermost(candidates):
+    smallest = min(_area(c[1]) for c in candidates)
     # Of near-identical smallest boxes (a side found at two neighbouring places), the strongest.
-    return max((c for c in strong if _area(c[1]) <= smallest * 1.02), key=lambda c: c[0])
+    return max((c for c in candidates if _area(c[1]) <= smallest * 1.02), key=lambda c: c[0])
 
 
 def _matches_size(box, expect, tolerance=SIZE_TOLERANCE):

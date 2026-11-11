@@ -16,6 +16,7 @@ from .camera import camera_differences, describe_camera, exposure_stops
 from .imaging import IMAGE_FILETYPES, is_raw
 from .metadata import APP_VERSION
 from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
+from . import history as hist
 from .session_data import (CURRENT, RAW_CROP_VERSION, REFERENCE, SESSION_VERSION,
                            SETTINGS_FILE_TYPE, alignment_key, describe_location,
                            describe_saved_reference, develop_record, fill_pair_from_session,
@@ -24,8 +25,22 @@ from .session_data import (CURRENT, RAW_CROP_VERSION, REFERENCE, SESSION_VERSION
                            session_has_reference, session_image_paths,
                            shift_legacy_raw_markers, write_session, _float, _pair_of)
 
-SESSION_FILETYPES = [("Session file", "*.json"), ("All files", "*.*")]
+SESSION_FILETYPES = [("Session or filter history", "*.json"), ("All files", "*.*")]
 SETTINGS_FILETYPES = [("Image settings or session", "*.json"), ("All files", "*.*")]
+
+
+def _same_file(a, b):
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
+def _is_history_file(path):
+    try:
+        return Path(path).is_file() and hist.is_history(read_session(path))
+    except (OSError, ValueError):
+        return False
 
 
 class SessionMixin:
@@ -128,6 +143,15 @@ class SessionMixin:
         return self._write_session(path)
 
     def _write_session(self, path):
+        current = self.pairs[CURRENT]
+        if current.history_inspection and current.session_path and _same_file(path, current.session_path):
+            return self._write_history(path)
+        if _is_history_file(path):
+            messagebox.showerror(
+                "Save session",
+                f"{os.path.basename(path)} is a filter history, not a session.  Choose another name; "
+                "a history is only saved over from one of its own inspections.", parent=self.root)
+            return None
         record = self._session_record(path)
         try:
             write_session(path, record)
@@ -138,6 +162,7 @@ class SessionMixin:
         self.pairs[0].row_alignments = record["row_alignments"]
         self.session_path = path
         self.pairs[0].session_path = path
+        self.pairs[0].history_inspection = None     # saved as a session of its own now
         self.pairs[0].label = describe_location(path)
         self.dirty = False
         self.config.add_recent(path)
@@ -147,6 +172,90 @@ class SessionMixin:
         self._draw_overlays()
         self.set_status(f"Session saved: {path}")
         return path
+
+    def _write_history(self, path):
+        """Save the current row back into the filter history it was opened from."""
+        current = self.pairs[CURRENT]
+        base = Path(path).resolve().parent
+        try:
+            history = hist.read_history(path)      # afresh: the command line may have changed it
+            index = hist.inspection_index(history, current.history_inspection)
+            summary = hist.apply_view(
+                history, index, current.annotations,
+                outline=current.outline,
+                alignment=current.alignment_record(),
+                adjustments=[dict(a) for a in current.adjust],
+                noise_reduction=[dict(n) for n in current.nr],
+                raw_develop=[develop_record(d, base) for d in current.develop])
+            hist.write_history(path, history)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Save to history", f"Could not save to the history:\n{path}\n\n{exc}",
+                                 parent=self.root)
+            return None
+        # Show the markers as the history now has them: new IDs, rejected ones gone.
+        view = hist.session_view(history, index, path)
+        current.annotations = [normalise_annotation(a) for a in view["annotations"]]
+        current.colour_labels = dict(view["colour_labels"])
+        current.label_prefixes = dict(view["label_prefixes"])
+        self.session_path = path
+        self.dirty = False
+        self.config.add_recent(path)
+        self._remember_dir(path)
+        self._refresh_recent_menu()
+        self._update_title()
+        self._draw_overlays()
+        changes = [f"{len(summary[key])} {key}" for key in ("added", "moved", "rejected", "recategorised")
+                   if summary[key]]
+        self.set_status(f"Saved to {os.path.basename(path)}, inspection {current.history_inspection}"
+                        + (f": {', '.join(changes)}." if changes else "."))
+        return path
+
+    def _choose_inspection(self, history, title):
+        """Ask which inspection of a history to open.  Returns its index, or None."""
+        inspections = history["inspections"]
+        if not inspections:
+            messagebox.showinfo(title, "That history has no inspections yet.", parent=self.root)
+            return None
+        if len(inspections) == 1:
+            return 0
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.configure(bg=theme.PANEL)
+        dialog.transient(self.root)
+        pad = self.px(14)
+        ttk.Label(dialog, text=f"Filter {history.get('filter') or ''}: which inspection?\n"
+                               "It opens with every pinhole known up to it.",
+                  justify=tk.LEFT).pack(anchor=tk.W, padx=pad, pady=(pad, self.px(8)))
+        listbox = tk.Listbox(dialog, height=min(12, len(inspections)), width=60, exportselection=False,
+                             bg=theme.FIELD, fg=theme.TEXT, highlightthickness=0,
+                             selectbackground=theme.ACCENT)
+        for n, insp in enumerate(inspections):
+            known = len(hist.known_at(history, n))
+            listbox.insert(tk.END, f"{n + 1}.  {insp.get('name') or insp['id']}   {insp.get('date') or ''}"
+                                   f"   ({known} pinholes known)")
+        listbox.selection_set(len(inspections) - 1)
+        listbox.see(len(inspections) - 1)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=pad)
+        outcome = {"index": None}
+
+        def accept(_event=None):
+            chosen = listbox.curselection()
+            if chosen:
+                outcome["index"] = chosen[0]
+            dialog.destroy()
+
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=pad, pady=pad)
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Open", style="Accent.TButton", command=accept).pack(
+            side=tk.RIGHT, padx=(0, self.px(8)))
+        listbox.bind("<Double-Button-1>", accept)
+        dialog.bind("<Return>", accept)
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        self._centre_dialog(dialog)
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        return outcome["index"]
 
     def _confirm_discard(self, action):
         """Offer to save unsaved work before ``action``.  False means cancel the action."""
@@ -275,9 +384,12 @@ class SessionMixin:
             lines += ["", "Saving will rewrite the file with the one row only."]
         return messagebox.askokcancel(title, "\n".join(lines), icon="warning", parent=self.root)
 
-    def open_session(self, path=None, row=CURRENT):
+    def open_session(self, path=None, row=CURRENT, inspection=None):
         """Load a session -- one inspection's images, alignment and markers -- into the
-        current row, or into the reference row to compare against.  The other row stays."""
+        current row, or into the reference row to compare against.  The other row stays.
+
+        ``path`` may also be a filter history; ``inspection`` then names the inspection
+        to open (by ID, stage or number), else the user is asked."""
         title = "Load session into reference row" if row == REFERENCE else "Open session"
         if row == CURRENT and not self._confirm_discard("open another session"):
             return
@@ -288,6 +400,27 @@ class SessionMixin:
         if session is None:
             return
         self._remember_dir(path)
+        history_inspection = history_label = None
+        if hist.is_history(session):
+            try:
+                history = hist.read_history(path)
+                index = (hist.inspection_index(history, inspection) if inspection is not None
+                         else self._choose_inspection(history, title))
+            except (OSError, ValueError) as exc:
+                messagebox.showerror(title, f"Could not open the history:\n{path}\n\n{exc}", parent=self.root)
+                return
+            if index is None:
+                return
+            insp = history["inspections"][index]
+            if hist.to_filter(insp) is None:
+                messagebox.showinfo(title, f"Inspection {insp['id']} has not been aligned yet, so its pinholes "
+                                           "cannot be placed.  Align it from the command line first:\n\n"
+                                           f"    python mssl_focus.py align {os.path.basename(path)} {insp['id']}",
+                                    parent=self.root)
+                return
+            session = hist.session_view(history, index, path)
+            history_inspection = insp["id"]
+            history_label = f"{history.get('filter') or Path(path).stem} / {insp.get('name') or insp['id']}"
         if session_has_reference(session) and not self._confirm_two_row_session(title, session, path, row):
             return
 
@@ -305,8 +438,9 @@ class SessionMixin:
         fill_pair_from_session(pair, session)
         missing_frames = resolve_frame_paths(pair, session.get("raw_develop"), Path(path).resolve().parent)
         pair.row_alignments = row_alignments_from_session(session)
-        pair.label = describe_location(path)
+        pair.label = history_label or describe_location(path)
         pair.session_path = path
+        pair.history_inspection = history_inspection
         jobs = [((row, idx), image_path, pair.nr[idx], pair.develop[idx])
                 for idx, image_path in enumerate(final) if image_path]
 

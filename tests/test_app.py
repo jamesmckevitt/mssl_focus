@@ -1159,3 +1159,58 @@ def test_outline_is_saved_and_carried_to_the_next_inspection(app, tmp_path):
     app.set_tool("detect")
     wait_idle(app)
     assert app._candidate_summary["lonely"] == ["P1"], "the copied marker with nothing under it is reported"
+
+
+def test_a_filter_history_opens_and_saves_back(app, tmp_path):
+    from src import history as hist
+
+    stage = make_stage(tmp_path / "em9" / "incoming", DOTS)
+    history_file = tmp_path / "em9" / "em9.json"
+    history = hist.new_history("em9")
+    hist.add_inspection(history, history_file, "incoming", stage / "back.png", stage / "front.png",
+                        date="2026-01-01")
+    insp = history["inspections"][0]
+    insp["to_filter"] = [[1.0, 0.0, -600.0], [0.0, 1.0, -400.0]]
+    insp["alignment"] = {"off_x": 0.0, "off_y": 0.0, "rot": 0.0, "img2_scale": 1.0, "glob_rot": 0.0}
+    insp["outline"] = [[100.0, 100.0], [1100.0, 100.0], [1100.0, 700.0], [100.0, 700.0]]
+    for n, (x, y) in enumerate(DOTS[:4]):
+        history["pinholes"].append({"id": f"I{n + 1}", "category": "incoming", "first_seen": "incoming",
+                                    "status": "accepted", "x": x - 600.0, "y": y - 400.0, "radius": 20.0,
+                                    "source": "detected"})
+    history["pinholes"].append({"id": "I5", "category": "incoming", "first_seen": "incoming",
+                                "status": "rejected", "x": 0.0, "y": 0.0, "radius": 20.0})
+    hist.write_history(history_file, history)
+
+    app.open_session(str(history_file), inspection="incoming")
+    wait_idle(app)
+    pair = app.pairs[0]
+    assert pair.has_image(BACKLIT) and pair.has_image(FRONTLIT)
+    assert [a["label"] for a in pair.annotations] == ["I1", "I2", "I3", "I4"]
+    assert (pair.annotations[2]["img1_x"], pair.annotations[2]["img1_y"]) == pytest.approx(DOTS[2])
+    assert pair.label == "em9 / Incoming inspection" and len(pair.outline) == 4
+
+    # Delete I2 and mark the last dot by hand, in the incoming colour.
+    del pair.annotations[1]
+    app.annot_colour = "#00cc44"
+    app.set_tool("annotate")
+    click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *DOTS[4]))
+    assert pair.annotations[-1]["label"] == "I5", "the window numbers from what it shows"
+    assert app._write_session(str(history_file)) == str(history_file)
+
+    saved = hist.read_history(history_file)
+    assert saved["type"] == hist.HISTORY_TYPE, "still a history, not a session"
+    assert hist.pinhole(saved, "I2")["status"] == "rejected"
+    assert hist.pinhole(saved, "I5")["status"] == "rejected", "the rejected I5 is untouched"
+    added = hist.pinhole(saved, "I6")
+    assert added["source"] == "manual" and (added["x"], added["y"]) == pytest.approx(
+        (DOTS[4][0] - 600, DOTS[4][1] - 400), abs=0.5)
+    assert [a["label"] for a in app.pairs[0].annotations] == ["I1", "I3", "I4", "I6"]
+    assert not app.dirty
+
+    # A plain session may not be saved over a history.
+    app.new_session()
+    load_stage(app, stage)
+    errors = len(app.shown_errors)
+    assert app._write_session(str(history_file)) is None
+    assert len(app.shown_errors) == errors + 1
+    assert hist.read_history(history_file)["pinholes"]

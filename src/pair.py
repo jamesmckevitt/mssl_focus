@@ -60,6 +60,7 @@ class ImagePair:
         self.label = ""
         self.session_path = None
         self.row_alignments = {}          # how this row lines up with other sessions shown as its reference
+        self.history_inspection = None    # set when opened from a filter history: the inspection's ID
 
     # ------------------------------------------------------------------ #
     # Images

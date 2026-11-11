@@ -80,6 +80,121 @@ class Scene:
         return back if back is not None else front
 
 
+# Labels keep this much clear space around them, as a fraction of text height,
+# so that separated labels have a visible gap rather than merely not touching.
+LABEL_GAP = 0.30
+
+
+def _overlap(a, b):
+    """Area shared by two label boxes once their clear space is allowed for."""
+    margin = (a["h"] + b["h"]) / 2 * LABEL_GAP
+    gap_x = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]) + margin / 2
+    gap_y = (min(a["y"] + a["h"] / 2, b["y"] + b["h"] / 2)
+             - max(a["y"] - a["h"] / 2, b["y"] - b["h"] / 2)) + margin
+    return gap_x * gap_y if gap_x > 0 and gap_y > 0 else 0.0
+
+
+def _clear_of_markers(box, markers, own):
+    """Push a label off any marker circle it is sitting on.  Markers cannot move,
+    so only the label does.  Its own marker is skipped: the label is placed
+    beside that one on purpose."""
+    moved = False
+    for n, (mx, my, mr) in enumerate(markers):
+        if n == own:
+            continue
+        gap_x = min(box["x"] + box["w"], mx + mr) - max(box["x"], mx - mr)
+        gap_y = min(box["y"] + box["h"] / 2, my + mr) - max(box["y"] - box["h"] / 2, my - mr)
+        if gap_x <= 0 or gap_y <= 0:
+            continue
+        box["y"] += (gap_y + 1) if box["y"] >= my else -(gap_y + 1)
+        moved = True
+    return moved
+
+
+def _relax(boxes, max_iter, markers=()):
+    """Separate overlapping labels vertically, which costs least room, while a
+    weak pull towards the marker stops a crowded group drifting away from it."""
+    for _ in range(max_iter):
+        moved = False
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                if not _overlap(a, b):
+                    continue
+                moved = True
+                gap_y = (min(a["y"] + a["h"] / 2, b["y"] + b["h"] / 2)
+                         - max(a["y"] - a["h"] / 2, b["y"] - b["h"] / 2)
+                         + (a["h"] + b["h"]) / 2 * LABEL_GAP)
+                push = gap_y / 2 + 1
+                if a["y"] <= b["y"]:
+                    a["y"] -= push
+                    b["y"] += push
+                else:
+                    a["y"] += push
+                    b["y"] -= push
+        for n, box in enumerate(boxes):
+            if _clear_of_markers(box, markers, n):
+                moved = True
+        if not moved:
+            return
+        for box in boxes:
+            box["y"] += 0.012 * (box["cy"] - box["y"])
+
+
+def _side(box, left):
+    box["x"] = (box["cx"] - box["r"] - box["pad"] - box["w"]) if left \
+        else (box["cx"] + box["r"] + box["pad"])
+    box["left"] = left
+
+
+def label_layout(items, font, measure, width, height, stroke, max_iter=600):
+    """Choose where each marker label goes, nudging apart any that collide.
+
+    ``items`` is a sequence of ``(cx, cy, radius, text)`` in panel pixels.
+    Returns one ``(x, y, leader)`` per item: the left-centre anchor for the
+    text, and whether the label ended up far enough from its marker to need a
+    line drawn back to it.
+
+    A label that collides with nothing keeps its usual place beside the marker,
+    so maps without crowding are unchanged.
+    """
+    boxes = []
+    for cx, cy, radius, text in items:
+        left, top, right, bottom = measure.textbbox((0, 0), text, font=font)
+        box = {"y": float(cy), "w": right - left, "h": bottom - top,
+               "cx": cx, "cy": cy, "r": radius, "pad": stroke + 3}
+        _side(box, False)
+        boxes.append(box)
+    markers = [(b["cx"], b["cy"], b["r"]) for b in boxes]
+
+    _relax(boxes, max_iter, markers)
+    # Where labels are still piled up, try putting one on the other side of its
+    # marker: in a dense group there is usually room on the left.
+    for _ in range(3):
+        crowded = [b for b in boxes if any(_overlap(b, o) for o in boxes if o is not b)]
+        if not crowded:
+            break
+        for box in crowded:
+            before = sum(_overlap(box, o) for o in boxes if o is not box)
+            start_x, start_y, start_left = box["x"], box["y"], box["left"]
+            _side(box, not start_left)
+            box["y"] = box["cy"]
+            after = sum(_overlap(box, o) for o in boxes if o is not box)
+            # Keep the swap only if it genuinely helps and stays on the panel:
+            # a label clipped by the edge is worse than one that overlaps.
+            fits = box["x"] >= 0 and box["x"] + box["w"] <= width
+            if after >= before or not fits:
+                box["x"], box["y"], box["left"] = start_x, start_y, start_left
+        _relax(boxes, max_iter, markers)
+
+    out = []
+    for box in boxes:
+        y = min(max(box["y"], box["h"] / 2), max(box["h"] / 2, height - box["h"] / 2))
+        x = min(max(box["x"], 0), max(0, width - box["w"]))
+        out.append({"x": x, "y": y, "w": box["w"], "h": box["h"], "left": box["left"],
+                    "leader": abs(y - box["cy"]) > max(2.0, box["h"] * 0.35) or box["left"]})
+    return out
+
+
 def export_geometry(scene, x0, y0, x1, y1, rows):
     """Output scale, padding and panel size for a canvas rectangle."""
     pad = max(0, int(scene.crop_pad))
@@ -120,6 +235,8 @@ def compose_export(scene, images, label_size, legend_size, line_width):
     label_font = _font(label_size * px_per_point * per_screen_px)
     legend_font = _font(legend_size * px_per_point * per_screen_px)
     stroke = max(1, int(round(line_width * per_screen_px)))
+    # Much finer than the lettering, so it guides the eye without competing.
+    leader_width = max(1, int(round(label_font.size * 0.02)))
     with_titles = len(rows) > 1
     title_font = _font(max(14, height // 45))
     title_h = int(title_font.size * 2.0) if with_titles else 0
@@ -139,21 +256,47 @@ def compose_export(scene, images, label_size, legend_size, line_width):
                       font=title_font)
         to_output = view @ scene.world_matrix(row, BACKLIT)
         marker_scale = geo.scale_of(to_output)
+        # Where every marker and its label go; the same in each panel, so work it
+        # out once and keep crowded labels legible by moving them apart.
+        visible = []
+        for ann in pair.annotations:
+            cx, cy = geo.apply(to_output, ann["img1_x"], ann["img1_y"])
+            radius = max(2.0, ann["radius"] * marker_scale)
+            if cx + radius < 0 or cy + radius < 0 or cx - radius > width or cy - radius > height:
+                continue
+            visible.append((cx, cy, radius, ann))
+        measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        labelled = [(cx, cy, r, marker_text(a)) for cx, cy, r, a in visible if marker_text(a)]
+        layout = label_layout(labelled, label_font, measure, width, height, stroke)
+        places = iter(layout)
         for col, frame in enumerate(frames):
             # Markers are drawn on the panel itself so they never spill into its neighbour.
             panel = frame.copy()
             panel_draw = ImageDraw.Draw(panel)
-            for ann in pair.annotations:
-                cx, cy = geo.apply(to_output, ann["img1_x"], ann["img1_y"])
-                radius = max(2.0, ann["radius"] * marker_scale)
-                if cx + radius < 0 or cy + radius < 0 or cx - radius > width or cy - radius > height:
-                    continue
+            places = iter(layout)
+            for cx, cy, radius, ann in visible:
                 panel_draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
                                    outline=ann["colour"], width=stroke)
                 text = marker_text(ann)
-                if text:
-                    panel_draw.text((cx + radius + stroke + 3, cy), text, fill=ann["colour"],
-                                    font=label_font, anchor="lm")
+                if not text:
+                    continue
+                place = next(places)
+                x, y = place["x"], place["y"]
+                if place["leader"]:
+                    # A moved label is joined to its marker by a thin line that
+                    # runs from the rim of the circle to a shelf under the text,
+                    # so it is unambiguous which spot the label belongs to and
+                    # the line never crosses the writing.
+                    shelf_y = y + place["h"] / 2 + max(1.0, place["h"] * 0.14)
+                    near_x = x + place["w"] if place["left"] else x
+                    far_x = x if place["left"] else x + place["w"]
+                    dx, dy = near_x - cx, shelf_y - cy
+                    span = math.hypot(dx, dy) or 1.0
+                    panel_draw.line([cx + dx / span * (radius + stroke / 2),
+                                     cy + dy / span * (radius + stroke / 2),
+                                     near_x, shelf_y, far_x, shelf_y],
+                                    fill=ann["colour"], width=leader_width, joint="curve")
+                panel_draw.text((x, y), text, fill=ann["colour"], font=label_font, anchor="lm")
             result.paste(panel, (col * (width + GAP), top + title_h))
 
     draw_watermark(result)

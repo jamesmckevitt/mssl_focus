@@ -323,3 +323,28 @@ def test_a_session_still_exports_as_before(tmp_path, capsys):
         assert image.size[0] > FRAMED_SIZE[0]    # two panels and a legend
     with pytest.raises(SystemExit, match="filter history"):
         cli.main(["export", str(session), "--inspection", "thermal"])
+
+
+def test_a_stage_added_late_goes_in_by_date_and_reports_what_was_already_there(tmp_path):
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    late = (700, 560)
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    hist.add_inspection(history, path, "incoming", back, front, date="2025-10-13")
+    hist.align_inspection(history, 0, load(back), load(front))
+    hist.detect_inspection(history, 0, load(back), load(front))
+    back, front = write_inspection(tmp_path / "ship", PINHOLES + [late], 0.5, (8, 4))
+    hist.add_inspection(history, path, "ship", back, front, date="2026-09-30")
+    hist.align_inspection(history, 1, load(back), load(front))
+    _summary, added = hist.detect_inspection(history, 1, load(back), load(front))
+    assert [p["id"] for p in added] == ["X1"]
+
+    # The shock test, photographed between the two, is added afterwards.
+    back, front = write_inspection(tmp_path / "shock", PINHOLES + [late], -0.7, (-12, 6))
+    insp = hist.add_inspection(history, path, "shock", back, front, date="2026-05-14")
+    assert [i["id"] for i in history["inspections"]] == ["incoming", "shock", "ship"]
+    index = history["inspections"].index(insp)
+    hist.align_inspection(history, index, load(back), load(front))
+    summary, added = hist.detect_inspection(history, index, load(back), load(front))
+    assert added == [], "X1 is recognised, not found again as a shock pinhole"
+    assert summary["already_here"] == ["X1"]

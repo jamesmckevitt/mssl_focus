@@ -271,6 +271,8 @@ def _print_detection(insp, summary, added):
         print("  skipped (rejected before): " + " ".join(summary["skipped_rejected"]))
     if summary["not_seen"]:
         print("  known but not seen now: " + " ".join(summary["not_seen"]))
+    if summary.get("already_here"):
+        print("  already here, though first recorded later: " + " ".join(summary["already_here"]))
     if summary.get("replaced"):
         print("  replaced earlier detections: " + " ".join(summary["replaced"]))
 
@@ -280,8 +282,10 @@ def cmd_add(args):
     history = hist.read_history(path) if path.is_file() else hist.new_history(args.filter or path.stem)
     insp = hist.add_inspection(history, path, args.stage, args.backlit, args.frontlit,
                                date=args.date, name=args.name, category_key=args.category)
-    index = len(history["inspections"]) - 1
-    print(f"added inspection {insp['id']} ({insp['name']}, {insp['date']}) to {path}")
+    index = history["inspections"].index(insp)
+    where = "" if index == len(history["inspections"]) - 1 else \
+        f", before {history['inspections'][index + 1]['id']} (by date)"
+    print(f"added inspection {insp['id']} ({insp['name']}, {insp['date']}) to {path}{where}")
     if not args.no_align:
         backlit, frontlit = _align(history, index, path, args)
         if args.detect:

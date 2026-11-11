@@ -238,7 +238,11 @@ def capture_date(path):
 
 def add_inspection(history, history_file, stage, backlit, frontlit=None, date=None, name=None,
                    category_key=None):
-    """Add an inspection (not yet aligned) and return it."""
+    """Add an inspection (not yet aligned) and return it.
+
+    Inspections are kept in date order, so one photographed before the latest
+    (a stage added late) goes in its place; ``history["inspections"].index(insp)``
+    says where."""
     stage = stage_key(stage)
     default_name, default_category = STAGES[stage]
     category(history, category_key or default_category)     # check it exists
@@ -255,7 +259,9 @@ def add_inspection(history, history_file, stage, backlit, frontlit=None, date=No
         "category": category_key or default_category,
         "images": _image_record(paths, base),
     }
-    history["inspections"].append(insp)
+    later = [n for n, other in enumerate(history["inspections"])
+             if other.get("date") and insp["date"] and other["date"] > insp["date"]]
+    history["inspections"].insert(later[0] if later else len(history["inspections"]), insp)
     return insp
 
 
@@ -701,6 +707,11 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
         "skipped_rejected": sorted(skipped, key=_id_order),
         "not_seen": sorted(not_seen, key=_id_order),
     }
+    # Pinholes recorded as first seen in a later inspection, but already here.
+    earlier = [pid for pid in summary["found_again"]
+               if _first_seen_index(history, pinhole(history, pid)) > index]
+    if earlier:
+        summary["already_here"] = earlier
     if removed:
         summary["replaced"] = removed
     insp["detection"] = summary

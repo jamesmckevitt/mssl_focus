@@ -11,6 +11,8 @@ builds one from its widgets, the command line builds one from a session file.
 import datetime
 import math
 
+import numpy as np
+
 from PIL import Image, ImageDraw, ImageFont
 
 from . import geometry as geo
@@ -83,115 +85,173 @@ class Scene:
 # Labels keep this much clear space around them, as a fraction of text height,
 # so that separated labels have a visible gap rather than merely not touching.
 LABEL_GAP = 0.30
+LABEL_RINGS = 16          # how far out a crowded label may go, in steps of about a text height
+LABEL_DIRECTIONS = 16     # directions tried at each step
+SHELF = 0.14              # the line under a moved label, below the text, as a fraction of text height
+
+# What a placement costs if it breaks a rule, worst first.  A spot that breaks
+# none is always taken in preference to any that breaks one.
+_OUTSIDE, _ON_LABEL, _ON_MARKER, _LEADER_ON_LABEL, _LEADER_ON_MARKER, _LEADERS_CROSS = (
+    1e9, 1e8, 1e7, 1e6, 1e5, 1e4)
 
 
-def _overlap(a, b):
-    """Area shared by two label boxes once their clear space is allowed for."""
-    margin = (a["h"] + b["h"]) / 2 * LABEL_GAP
-    gap_x = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]) + margin / 2
-    gap_y = (min(a["y"] + a["h"] / 2, b["y"] + b["h"] / 2)
-             - max(a["y"] - a["h"] / 2, b["y"] - b["h"] / 2)) + margin
-    return gap_x * gap_y if gap_x > 0 and gap_y > 0 else 0.0
+def _boxes_hit(boxes, box):
+    """Which of ``boxes`` (n x 4: x0, y0, x1, y1) overlap ``box``."""
+    if not len(boxes):
+        return np.zeros(0, dtype=bool)
+    return ((boxes[:, 0] < box[2]) & (boxes[:, 2] > box[0])
+            & (boxes[:, 1] < box[3]) & (boxes[:, 3] > box[1]))
 
 
-def _clear_of_markers(box, markers, own):
-    """Push a label off any marker circle it is sitting on.  Markers cannot move,
-    so only the label does.  Its own marker is skipped: the label is placed
-    beside that one on purpose."""
-    moved = False
-    for n, (mx, my, mr) in enumerate(markers):
-        if n == own:
-            continue
-        gap_x = min(box["x"] + box["w"], mx + mr) - max(box["x"], mx - mr)
-        gap_y = min(box["y"] + box["h"] / 2, my + mr) - max(box["y"] - box["h"] / 2, my - mr)
-        if gap_x <= 0 or gap_y <= 0:
-            continue
-        box["y"] += (gap_y + 1) if box["y"] >= my else -(gap_y + 1)
-        moved = True
-    return moved
+def _circles_hit_box(circles, box):
+    """Which circles (n x 3: cx, cy, r) a box overlaps."""
+    if not len(circles):
+        return np.zeros(0, dtype=bool)
+    nx = np.clip(circles[:, 0], box[0], box[2])
+    ny = np.clip(circles[:, 1], box[1], box[3])
+    return np.hypot(circles[:, 0] - nx, circles[:, 1] - ny) < circles[:, 2]
 
 
-def _relax(boxes, max_iter, markers=()):
-    """Separate overlapping labels vertically, which costs least room, while a
-    weak pull towards the marker stops a crowded group drifting away from it."""
-    for _ in range(max_iter):
-        moved = False
-        for i, a in enumerate(boxes):
-            for b in boxes[i + 1:]:
-                if not _overlap(a, b):
-                    continue
-                moved = True
-                gap_y = (min(a["y"] + a["h"] / 2, b["y"] + b["h"] / 2)
-                         - max(a["y"] - a["h"] / 2, b["y"] - b["h"] / 2)
-                         + (a["h"] + b["h"]) / 2 * LABEL_GAP)
-                push = gap_y / 2 + 1
-                if a["y"] <= b["y"]:
-                    a["y"] -= push
-                    b["y"] += push
-                else:
-                    a["y"] += push
-                    b["y"] -= push
-        for n, box in enumerate(boxes):
-            if _clear_of_markers(box, markers, n):
-                moved = True
-        if not moved:
-            return
-        for box in boxes:
-            box["y"] += 0.012 * (box["cy"] - box["y"])
+def _segment_points(p, q, count=16):
+    t = np.linspace(0.0, 1.0, count)[:, None]
+    p = np.asarray(p, dtype=float)
+    return p + t * (np.asarray(q, dtype=float) - p)
 
 
-def _side(box, left):
-    box["x"] = (box["cx"] - box["r"] - box["pad"] - box["w"]) if left \
-        else (box["cx"] + box["r"] + box["pad"])
-    box["left"] = left
+def _points_in_boxes(points, boxes):
+    """Which boxes any of ``points`` falls inside."""
+    if not len(boxes):
+        return np.zeros(0, dtype=bool)
+    xs, ys = points[:, 0][:, None], points[:, 1][:, None]
+    inside = (xs > boxes[:, 0]) & (xs < boxes[:, 2]) & (ys > boxes[:, 1]) & (ys < boxes[:, 3])
+    return inside.any(axis=0)
 
 
-def label_layout(items, font, measure, width, height, stroke, max_iter=600):
-    """Choose where each marker label goes, nudging apart any that collide.
+def _segment_hits_circles(p, q, circles):
+    """Which circles the segment ``p``-``q`` passes through."""
+    if not len(circles):
+        return np.zeros(0, dtype=bool)
+    p, q = np.asarray(p, dtype=float), np.asarray(q, dtype=float)
+    d = q - p
+    length2 = float(d @ d) or 1e-9
+    t = np.clip(((circles[:, :2] - p) @ d) / length2, 0.0, 1.0)
+    nearest = p + t[:, None] * d
+    return np.hypot(*(circles[:, :2] - nearest).T) < circles[:, 2]
+
+
+def _segments_cross(p, q, segments):
+    """Which of ``segments`` (n x 4) the segment ``p``-``q`` properly crosses."""
+    if not len(segments):
+        return np.zeros(0, dtype=bool)
+    a, b = segments[:, :2], segments[:, 2:]
+    p = np.broadcast_to(np.asarray(p, dtype=float), a.shape)
+    q = np.broadcast_to(np.asarray(q, dtype=float), a.shape)
+
+    def side(o, u, v):
+        return (u[:, 0] - o[:, 0]) * (v[:, 1] - o[:, 1]) - (u[:, 1] - o[:, 1]) * (v[:, 0] - o[:, 0])
+
+    return (side(p, q, a) * side(p, q, b) < 0) & (side(a, b, p) * side(a, b, q) < 0)
+
+
+def _candidates(cx, cy, radius, w, h, pad):
+    """Places a label might go, nearest first: ``(cost, x, centre_y, ring)``.
+    Ring 0 is beside the marker (no leader); further rings need one."""
+    out = [(0.0, cx + radius + pad, cy, 0), (1.0, cx - radius - pad - w, cy, 0)]
+    step = 0.9 * h
+    for ring in range(1, LABEL_RINGS + 1):
+        reach = radius + pad + ring * step
+        for k in range(LABEL_DIRECTIONS):
+            angle = 2.0 * math.pi * k / LABEL_DIRECTIONS
+            ux, uy = math.cos(angle), math.sin(angle)
+            if abs(ux) > 0.3:          # beside: the near end of the text faces the marker
+                x = cx + ux * reach if ux > 0 else cx + ux * reach - w
+                y = cy + uy * reach
+            else:                      # above or below: centred over the direction
+                x = cx + ux * reach - w / 2.0
+                y = cy + uy * reach + (h / 2.0 if uy > 0 else -h / 2.0)
+            # Prefer near, then to the side (as an uncrowded label sits), then right.
+            cost = 10.0 * ring + 2.0 * abs(uy) + (0.5 if ux < 0 else 0.0)
+            out.append((cost, x, y, ring))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def _leader(cx, cy, radius, stroke, x, y, w, h):
+    """The leader of a moved label: from the rim of its marker to the near end of
+    the shelf under the text."""
+    left_side = x + w / 2.0 < cx
+    near = (x + w if left_side else x, y + h / 2.0 + SHELF * h)
+    dx, dy = near[0] - cx, near[1] - cy
+    span = math.hypot(dx, dy) or 1.0
+    return (cx + dx / span * (radius + stroke), cy + dy / span * (radius + stroke)), near, left_side
+
+
+def label_layout(items, font, measure, width, height, stroke):
+    """Choose where each marker label goes, so that labels stay readable.
 
     ``items`` is a sequence of ``(cx, cy, radius, text)`` in panel pixels.
-    Returns one ``(x, y, leader)`` per item: the left-centre anchor for the
-    text, and whether the label ended up far enough from its marker to need a
-    line drawn back to it.
+    Returns one dict per item: ``x`` (left of the text), ``y`` (its middle),
+    ``w``, ``h``, ``left`` (the text is left of its marker) and ``leader``
+    (it was moved away from its marker and needs a line back to it).
 
-    A label that collides with nothing keeps its usual place beside the marker,
-    so maps without crowding are unchanged.
+    A label goes beside its marker if that is clear.  Otherwise it is moved out,
+    step by step and in all directions, to the nearest place where it overlaps
+    no other label and no marker, and where its leader line crosses no label,
+    no marker and no other leader.  Crowded markers are placed first, while
+    there is most room near them.  Only if nowhere in reach is clear is the
+    least bad place taken.  An uncrowded map keeps every label beside its marker.
     """
-    boxes = []
-    for cx, cy, radius, text in items:
+    n = len(items)
+    if not n:
+        return []
+    pad = stroke + 3
+    sizes = []
+    for _cx, _cy, _r, text in items:
         left, top, right, bottom = measure.textbbox((0, 0), text, font=font)
-        box = {"y": float(cy), "w": right - left, "h": bottom - top,
-               "cx": cx, "cy": cy, "r": radius, "pad": stroke + 3}
-        _side(box, False)
-        boxes.append(box)
-    markers = [(b["cx"], b["cy"], b["r"]) for b in boxes]
+        sizes.append((right - left, bottom - top))
+    text_h = max(h for _w, h in sizes)
+    gap = LABEL_GAP * text_h
+    circles = np.array([(cx, cy, r + stroke / 2.0 + gap / 2.0) for cx, cy, r, _t in items], dtype=float)
 
-    _relax(boxes, max_iter, markers)
-    # Where labels are still piled up, try putting one on the other side of its
-    # marker: in a dense group there is usually room on the left.
-    for _ in range(3):
-        crowded = [b for b in boxes if any(_overlap(b, o) for o in boxes if o is not b)]
-        if not crowded:
-            break
-        for box in crowded:
-            before = sum(_overlap(box, o) for o in boxes if o is not box)
-            start_x, start_y, start_left = box["x"], box["y"], box["left"]
-            _side(box, not start_left)
-            box["y"] = box["cy"]
-            after = sum(_overlap(box, o) for o in boxes if o is not box)
-            # Keep the swap only if it genuinely helps and stays on the panel:
-            # a label clipped by the edge is worse than one that overlaps.
-            fits = box["x"] >= 0 and box["x"] + box["w"] <= width
-            if after >= before or not fits:
-                box["x"], box["y"], box["left"] = start_x, start_y, start_left
-        _relax(boxes, max_iter, markers)
+    # Most crowded first: they have the fewest good places.
+    centres = circles[:, :2]
+    crowd = (np.hypot(centres[:, None, 0] - centres[None, :, 0],
+                      centres[:, None, 1] - centres[None, :, 1]) < 6.0 * text_h).sum(axis=1)
+    order = sorted(range(n), key=lambda i: (-crowd[i], items[i][1], items[i][0]))
 
-    out = []
-    for box in boxes:
-        y = min(max(box["y"], box["h"] / 2), max(box["h"] / 2, height - box["h"] / 2))
-        x = min(max(box["x"], 0), max(0, width - box["w"]))
-        out.append({"x": x, "y": y, "w": box["w"], "h": box["h"], "left": box["left"],
-                    "leader": abs(y - box["cy"]) > max(2.0, box["h"] * 0.35) or box["left"]})
+    placed = np.zeros((0, 4))
+    leaders = np.zeros((0, 4))
+    out = [None] * n
+    for i in order:
+        cx, cy, radius, _text = items[i]
+        w, h = sizes[i]
+        others = np.delete(circles, i, axis=0)
+        best = None
+        for base, x, y, ring in _candidates(cx, cy, radius, w, h, pad):
+            top, bottom = y - h / 2.0, y + h / 2.0 + SHELF * h + 1.0
+            box = (x - gap / 2.0, top - gap / 2.0, x + w + gap / 2.0, bottom + gap / 2.0)
+            penalty = 0.0
+            if x < 0 or top < 0 or x + w > width or bottom > height:
+                penalty += _OUTSIDE
+            penalty += _ON_LABEL * float(_boxes_hit(placed, box).sum())
+            penalty += _ON_MARKER * float(_circles_hit_box(others, box).sum())
+            if ring and penalty < _ON_MARKER:
+                rim, near, _left = _leader(cx, cy, radius, stroke, x, y, w, h)
+                penalty += _LEADER_ON_LABEL * float(_points_in_boxes(_segment_points(rim, near), placed).sum())
+                penalty += _LEADER_ON_MARKER * float(_segment_hits_circles(rim, near, others).sum())
+                penalty += _LEADERS_CROSS * float(_segments_cross(rim, near, leaders).sum())
+            cost = penalty + base
+            if best is None or cost < best[0]:
+                best = (cost, x, y, ring, box)
+                if penalty == 0.0:
+                    break      # candidates come nearest first, so the first clear one is the best
+        _cost, x, y, ring, box = best
+        placed = np.vstack([placed, box])
+        rim, near, left_side = _leader(cx, cy, radius, stroke, x, y, w, h)
+        if ring:
+            leaders = np.vstack([leaders, [rim[0], rim[1], near[0], near[1]]])
+        out[i] = {"x": float(x), "y": float(y), "w": w, "h": h, "left": bool(left_side),
+                  "leader": bool(ring)}
     return out
 
 
@@ -236,7 +296,7 @@ def compose_export(scene, images, label_size, legend_size, line_width):
     legend_font = _font(legend_size * px_per_point * per_screen_px)
     stroke = max(1, int(round(line_width * per_screen_px)))
     # Much finer than the lettering, so it guides the eye without competing.
-    leader_width = max(1, int(round(label_font.size * 0.02)))
+    leader_width = max(1, int(round(label_font.size * 0.035)))
     with_titles = len(rows) > 1
     title_font = _font(max(14, height // 45))
     title_h = int(title_font.size * 2.0) if with_titles else 0
@@ -287,7 +347,7 @@ def compose_export(scene, images, label_size, legend_size, line_width):
                     # runs from the rim of the circle to a shelf under the text,
                     # so it is unambiguous which spot the label belongs to and
                     # the line never crosses the writing.
-                    shelf_y = y + place["h"] / 2 + max(1.0, place["h"] * 0.14)
+                    shelf_y = y + place["h"] / 2 + max(1.0, place["h"] * SHELF)
                     near_x = x + place["w"] if place["left"] else x
                     far_x = x if place["left"] else x + place["w"]
                     dx, dy = near_x - cx, shelf_y - cy

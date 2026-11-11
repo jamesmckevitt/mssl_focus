@@ -308,6 +308,9 @@ def _print_detection(insp, summary, added):
         print("  already here, though first recorded later: " + " ".join(summary["already_here"]))
     if summary.get("replaced"):
         print("  replaced earlier detections: " + " ".join(summary["replaced"]))
+    if summary.get("fainter"):
+        print(f"  {summary['fainter']} fainter spot(s) left out, mostly noise; --sensitivity 75 adds them "
+              "for review")
 
 
 def _photo_paths(source, frontlit=None, quiet=False):
@@ -507,7 +510,7 @@ def _history_parser():
     q.add_argument("--filter", help="filter name, for a new history (default: the file name)")
     q.add_argument("--no-align", action="store_true", help="do not align it yet")
     q.add_argument("--detect", action="store_true", help="also search it for pinholes")
-    q.add_argument("--sensitivity", type=float, help="with --detect: 0-100 (default 75)")
+    q.add_argument("--sensitivity", type=float, help="with --detect: 0-100 (default 50, clear spots only)")
     aligning(q)
     common(q)
 
@@ -538,7 +541,8 @@ def _history_parser():
     q.add_argument("history")
     q.add_argument("inspection", nargs="?", help="ID, stage or number (default: the latest)")
     q.add_argument("--sensitivity", type=float,
-                   help="0-100: 50 offers only clear spots, 75 clear and likely, 100 everything. Default: 75")
+                   help="0-100: 50 adds only clear spots, 75 clear and likely, 100 everything. Default: 50, "
+                        "as likely spots are mostly sensor noise (the window still offers them for review)")
     q.add_argument("--category", help="category for the new pinholes (default: the inspection's)")
     q.add_argument("--redo", action="store_true",
                    help="first drop the pinholes an earlier detect added to this inspection "

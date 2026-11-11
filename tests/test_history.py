@@ -112,6 +112,23 @@ def test_a_rerun_with_redo_replaces_only_unreviewed_detections(tmp_path):
     assert hist.pinhole(history, "I3")["status"] == hist.REJECTED
 
 
+def test_only_clear_spots_are_added_unless_asked_for_fainter_ones(tmp_path):
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    faint = (700, 600)
+    arr = np.asarray(Image.open(back)).copy()
+    x, y = faint
+    arr[y - 3:y + 4, x - 3:x + 4] = 50          # well short of a pinhole's brightness
+    Image.fromarray(arr).save(back)
+    _insp, _report, summary, added = _inspect(history, path, "incoming", back, front)
+    assert len(added) == len(PINHOLES)
+    assert summary["fainter"] == 1
+    summary, added = hist.detect_inspection(history, 0, load(back), load(front), sensitivity=75)
+    assert len(added) == 1 and added[0]["tier"] == "likely"
+    assert "fainter" not in summary
+
+
 def test_a_spot_also_seen_from_the_front_is_flagged(tmp_path):
     path = tmp_path / "em9.json"
     history = hist.new_history("em9")

@@ -71,6 +71,13 @@ FRONTLIT_REACH = 6.0      # backlit pixels: a frontlit spot this close flags a c
 SEARCH_PAD = 80           # pixels searched beyond the outline, so spots on its edge are judged fairly
 SPOT_LIMIT = 12000
 MARKER_RADIUS = 20.0      # backlit pixels: the circle drawn round a new pinhole, as in the window
+# Detection without a window adds only clear spots unless asked for more.  On
+# eleven hand-checked inspections (EM1-EM4), 205 of the 219 pinholes marked by
+# hand score clear (3.0 or more) where first seen, and only 19 unmarked spots
+# do; between likely and clear (2.0-3.0) there were 7 marked pinholes and about
+# 780 unmarked spots, nearly all sensor noise in dark, strongly stretched frames.
+# In the window every likely spot is still offered, for review by eye.
+AUTO_SENSITIVITY = 50
 
 _ID_PATTERN = re.compile(r"^(.*?)(\d+)$")
 
@@ -677,7 +684,7 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
     through only from behind, so it is often dust or a glint instead.
     """
     from .detect import DEFAULT_SENSITIVITY, flag_present_in, minimum_score
-    sensitivity = DEFAULT_SENSITIVITY if sensitivity is None else sensitivity
+    sensitivity = AUTO_SENSITIVITY if sensitivity is None else sensitivity
     insp = history["inspections"][index]
     matrix = to_filter(insp)
     outline = insp.get("outline") or []
@@ -776,6 +783,12 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
         summary["already_here"] = earlier
     if removed:
         summary["replaced"] = removed
+    # Spots the window would offer for review that were left out here.
+    likely = minimum_score(DEFAULT_SENSITIVITY)
+    if likely < floor:
+        fainter = [c for c in spots if likely <= c["score"] < floor
+                   and _nearest(everything, *geo.apply(matrix, c["x"], c["y"]))[0] is None]
+        summary["fainter"] = len(fainter)
     insp["detection"] = summary
     return summary, added
 

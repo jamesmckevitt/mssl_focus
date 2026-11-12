@@ -129,6 +129,29 @@ def test_only_clear_spots_are_added_unless_asked_for_fainter_ones(tmp_path):
     assert "fainter" not in summary
 
 
+def test_repairs_are_found_from_the_front(tmp_path):
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    sealed, leaking = (600, 300), PINHOLES[2]          # one patch dark from behind, one still letting light through
+    shown = np.asarray(Image.open(front)).copy()
+    for x, y in (sealed, leaking):
+        yy, xx = np.ogrid[:shown.shape[0], :shown.shape[1]]
+        shown[(xx - x) ** 2 + (yy - y) ** 2 <= 9 ** 2] = 250
+    Image.fromarray(shown).save(front)
+    insp, _report, summary, added = _inspect(history, path, "incoming", back, front)
+    repairs = [p for p in added if p["category"] == "repairs"]
+    assert [p["id"] for p in repairs] == ["R1", "R2"]
+    assert all(p["tier"] == "repair" for p in repairs)
+    assert len(added) == len(PINHOLES) + 1, "the leaking repair is not also a pinhole"
+    for p, true in zip(sorted(repairs, key=lambda q: q["x"]), sorted([sealed, leaking])):
+        x, y, _r = hist.image_position(insp, p)
+        assert (x, y) == pytest.approx(true, abs=2)
+    # Found again next time, even though no light comes through the sealed one.
+    summary, added = hist.detect_inspection(history, 0, load(back), load(front))
+    assert added == [] and {"R1", "R2"} <= set(summary["found_again"])
+
+
 def test_a_spot_also_seen_from_the_front_is_flagged(tmp_path):
     path = tmp_path / "em9.json"
     history = hist.new_history("em9")

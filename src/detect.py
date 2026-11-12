@@ -214,6 +214,60 @@ def realign_markers(markers, candidates, tolerance=12.0):
                  else (float(markers[m][0]), float(markers[m][1])) for m in range(len(markers))]
     return positions, set(matched)
 
+# A repair seen from the front: a round, nearly saturated white patch, far
+# bigger than dust.  Checked on EM1-EM4, these limits find all twelve repairs
+# marked by hand and nothing else; dust, glints and mesh crossings are smaller,
+# dimmer or ragged.
+PATCH_CONTRAST = 80       # 8-bit levels above the surrounding membrane
+PATCH_MIN_AREA = 100      # pixels
+PATCH_MAX_AREA = 2500
+PATCH_BRIGHTNESS = 210    # mean level over the patch
+PATCH_ROUNDNESS = 0.90    # circularity of its outline (1 = a circle) ...
+PATCH_LARGE = 200         # ... unless it is at least this big
+
+
+def find_patches(image, polygon=None):
+    """Repair patches in a frontlit ``image`` (a PIL image): a list of dicts with
+    ``x``, ``y``, ``radius`` (pixels), ``area``, ``brightness`` and ``roundness``,
+    largest first.  Only patches inside ``polygon`` are kept, if it is given."""
+    import cv2
+
+    arr = np.asarray(image)
+    grey = (arr.max(axis=2) if arr.ndim == 3 else arr).astype(np.float32)
+    height, width = grey.shape
+    small = cv2.resize(grey, (max(1, width // 4), max(1, height // 4)), interpolation=cv2.INTER_AREA)
+    background = cv2.medianBlur(np.clip(small, 0, 255).astype(np.uint8), 31).astype(np.float32)
+    background = cv2.resize(background, (width, height), interpolation=cv2.INTER_LINEAR)
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        ((grey - background) > PATCH_CONTRAST).astype(np.uint8), connectivity=8)
+
+    patches = []
+    for i in range(1, count):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+        w, h = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+        if not PATCH_MIN_AREA <= area <= PATCH_MAX_AREA or max(w, h) > 2 * min(w, h) or area < 0.5 * w * h:
+            continue
+        mine = labels[y0:y0 + h, x0:x0 + w] == i
+        brightness = float(grey[y0:y0 + h, x0:x0 + w][mine].mean())
+        if brightness < PATCH_BRIGHTNESS:
+            continue
+        contours, _ = cv2.findContours(mine.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        hull = cv2.convexHull(max(contours, key=cv2.contourArea))
+        perimeter = cv2.arcLength(hull, True)
+        roundness = 4 * math.pi * cv2.contourArea(hull) / max(1.0, perimeter * perimeter)
+        if roundness < PATCH_ROUNDNESS and area < PATCH_LARGE:
+            continue
+        patches.append({"x": float(centroids[i][0]) + 0.5, "y": float(centroids[i][1]) + 0.5,
+                        "radius": math.sqrt(area / math.pi), "area": area,
+                        "brightness": brightness, "roundness": roundness})
+    if polygon is not None and patches:
+        inside = inside_polygon([p["x"] for p in patches], [p["y"] for p in patches], polygon)
+        patches = [p for p, ok in zip(patches, inside) if ok]
+    patches.sort(key=lambda p: -p["area"])
+    return patches
+
+
 def flag_present_in(candidates, others, tolerance=10.0):
     """Mark each candidate with whether a spot in ``others`` (a list of ``(x, y)``
     in the same pixel space) lies at the same place."""

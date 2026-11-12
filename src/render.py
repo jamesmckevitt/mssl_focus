@@ -87,7 +87,8 @@ class Scene:
 LABEL_GAP = 0.30
 LABEL_RINGS = 16          # how far out a crowded label may go, in steps of about a text height
 LABEL_DIRECTIONS = 16     # directions tried at each step
-SHELF = 0.14              # the line under a moved label, below the text, as a fraction of text height
+HALO = "#000000"          # the dark rim drawn round markers and labels
+SHELF = 0.14             # the line under a moved label, below the text, as a fraction of text height
 
 # What a placement costs if it breaks a rule, worst first.  A spot that breaks
 # none is always taken in preference to any that breaks one.
@@ -335,6 +336,11 @@ def compose_export(scene, images, label_size, legend_size, line_width):
             panel_draw = ImageDraw.Draw(panel)
             places = iter(layout)
             for cx, cy, radius, ann in visible:
+                # A dark rim round each circle and label keeps them legible
+                # where the photograph is bright (frontlit membrane, glints).
+                halo = max(1, round(stroke * 0.6))
+                panel_draw.ellipse([cx - radius - halo, cy - radius - halo, cx + radius + halo, cy + radius + halo],
+                                   outline=HALO, width=stroke + 2 * halo)
                 panel_draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
                                    outline=ann["colour"], width=stroke)
                 text = marker_text(ann)
@@ -356,7 +362,8 @@ def compose_export(scene, images, label_size, legend_size, line_width):
                                      cy + dy / span * (radius + stroke / 2),
                                      near_x, shelf_y, far_x, shelf_y],
                                     fill=ann["colour"], width=leader_width, joint="curve")
-                panel_draw.text((x, y), text, fill=ann["colour"], font=label_font, anchor="lm")
+                panel_draw.text((x, y), text, fill=ann["colour"], font=label_font, anchor="lm",
+                                stroke_width=max(1, round(label_font.size * 0.07)), stroke_fill=HALO)
             result.paste(panel, (col * (width + GAP), top + title_h))
 
     draw_watermark(result)

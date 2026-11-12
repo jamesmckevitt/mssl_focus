@@ -59,6 +59,7 @@ STAGES = {
     "thermal": ("Thermal test", "thermal"),
     "ship": ("Ship to NAOJ", "ship"),
 }
+REPAIRS = "repairs"       # the category that repairs found in a frontlit image go in
 _STAGE_WORDS = [
     ("incoming", "incoming"), ("shock", "shock"), ("acoustic", "acoustic"), ("vibration", "acoustic"),
     ("thermal", "thermal"), ("naoj", "ship"), ("ship", "ship"),
@@ -681,9 +682,11 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
     rejected positions are skipped, and the rest are added as new pinholes,
     first seen in this inspection, numbered left to right.  A spot that also
     shows in the frontlit image is flagged (``in_frontlit``): a pinhole lets light
-    through only from behind, so it is often dust or a glint instead.
+    through only from behind, so it is often dust or a glint instead.  Repairs
+    are found in the frontlit image, as white patches, and recorded as repairs;
+    a backlit spot on one is that repair letting light through, not a new pinhole.
     """
-    from .detect import DEFAULT_SENSITIVITY, flag_present_in, minimum_score
+    from .detect import DEFAULT_SENSITIVITY, find_patches, flag_present_in, minimum_score
     sensitivity = AUTO_SENSITIVITY if sensitivity is None else sensitivity
     insp = history["inspections"][index]
     matrix = to_filter(insp)
@@ -707,20 +710,35 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
     floor = minimum_score(sensitivity)
     offered = [c for c in spots if c["score"] >= floor]
 
-    if frontlit is not None and offered:
+    patches = []
+    if frontlit is not None:
         to_back = frontlit_to_backlit(insp, (backlit.size, frontlit.size))
         front_outline = geo.apply_many(geo.invert(to_back), outline)
-        front_spots = find_spots(frontlit, front_outline)
-        others = [tuple(p) for p in geo.apply_many(to_back, [(c["x"], c["y"]) for c in front_spots])] \
-            if front_spots else []
-        flag_present_in(offered, others, tolerance=FRONTLIT_REACH)
-        for c in offered:
-            c["in_frontlit"] = c.pop("in_reference", False)
+        # Repairs show from the front as white patches; most let no light
+        # through, and a spot that does shine through one is that repair.
+        for c in find_patches(frontlit, front_outline):
+            x, y = geo.apply(to_back, c["x"], c["y"])
+            patches.append({"x": x, "y": y, "radius": c["radius"] * geo.scale_of(to_back),
+                            "tier": "repair", "repair": True})
+        offered = [c for c in offered if not _under_patch(c, patches)]
+        if offered:
+            front_spots = find_spots(frontlit, front_outline)
+            others = [tuple(p) for p in geo.apply_many(to_back, [(c["x"], c["y"]) for c in front_spots])] \
+                if front_spots else []
+            flag_present_in(offered, others, tolerance=FRONTLIT_REACH)
+            for c in offered:
+                c["in_frontlit"] = c.pop("in_reference", False)
+    repair_cat = cat
+    if patches and category_key is None:
+        try:
+            repair_cat = category(history, REPAIRS)
+        except HistoryError:
+            pass
 
     scale = geo.scale_of(matrix)
     everything = [(p["x"], p["y"], max(MATCH_REACH, float(p.get("radius", 20.0)))) for p in history["pinholes"]]
     found_again, skipped, new = {}, {}, []
-    for c in offered:
+    for c in patches + offered:
         fx, fy = geo.apply(matrix, c["x"], c["y"])
         n, _d = _nearest(everything, fx, fy)
         if n is None:
@@ -740,7 +758,7 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
             continue
         x, y, radius = image_position(insp, p)
         reach = max(radius, MATCH_REACH / scale)
-        if any(math.hypot(c["x"] - x, c["y"] - y) <= reach for c in spots):
+        if any(math.hypot(c["x"] - x, c["y"] - y) <= reach for c in spots + patches):
             present.add(p["id"])
     not_seen = [p["id"] for p in known_at(history, index) if p["id"] not in present]
 
@@ -750,18 +768,20 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
         # Two new spots on top of each other are one pinhole.
         if any(math.hypot(fx - q["x"], fy - q["y"]) <= MATCH_REACH for q in added):
             continue
+        kind = repair_cat if c.get("repair") else cat
         record = {
-            "id": next_id(history, cat["prefix"]),
-            "category": cat["key"],
+            "id": next_id(history, kind["prefix"]),
+            "category": kind["key"],
             "first_seen": insp["id"],
             "status": ACCEPTED,
             "x": round(fx, 2),
             "y": round(fy, 2),
             "radius": round(max(MARKER_RADIUS, 2.0 * c["radius"]) * scale, 2),
             "source": "detected",
-            "score": round(c["score"], 2),
             "tier": c["tier"],
         }
+        if "score" in c:
+            record["score"] = round(c["score"], 2)
         if c.get("in_frontlit"):
             record["in_frontlit"] = True
         history["pinholes"].append(record)
@@ -791,6 +811,11 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
         summary["fainter"] = len(fainter)
     insp["detection"] = summary
     return summary, added
+
+
+def _under_patch(spot, patches, margin=4.0):
+    """Whether a backlit spot lies on one of the repair ``patches`` (backlit pixels)."""
+    return any(math.hypot(spot["x"] - p["x"], spot["y"] - p["y"]) <= p["radius"] + margin for p in patches)
 
 
 def _id_order(pid):

@@ -850,6 +850,20 @@ def session_view(history, index, history_file, show_rejected=False):
             colour_labels[colour] = "Rejected" if rejected else cat["name"]
             if not rejected:
                 prefixes[colour] = cat["prefix"]
+    # Every category looked for up to this inspection is in the legend, with
+    # n=0 if nothing was found: each inspection's stage, and repairs, which are
+    # looked for at the incoming inspection.
+    checked = {p["category"] for p in known_at(history, index)}
+    for earlier in history["inspections"][:index + 1]:
+        checked.add(earlier.get("category") or STAGES[earlier["stage"]][1])
+        if earlier["stage"] == "incoming":
+            checked.add(REPAIRS)
+    legend_colours = []
+    for cat in categories(history):
+        if cat["key"] in checked:
+            legend_colours.append(cat["colour"])
+            colour_labels.setdefault(cat["colour"], cat["name"])
+            prefixes.setdefault(cat["colour"], cat["prefix"])
     return {
         "version": SESSION_VERSION,
         "image_paths": paths,
@@ -860,6 +874,7 @@ def session_view(history, index, history_file, show_rejected=False):
         "annotations": annotations,
         "colour_labels": colour_labels,
         "label_prefixes": prefixes,
+        "legend_colours": legend_colours,
         "filter_outline": [list(p) for p in insp.get("outline") or []],
         "adjustments": insp.get("adjustments") or [],
         "noise_reduction": insp.get("noise_reduction") or [],

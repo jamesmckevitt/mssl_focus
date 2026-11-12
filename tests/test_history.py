@@ -152,6 +152,27 @@ def test_repairs_are_found_from_the_front(tmp_path):
     assert added == [] and {"R1", "R2"} <= set(summary["found_again"])
 
 
+def test_a_stage_checked_with_nothing_new_still_shows_in_the_legend(tmp_path):
+    from src.pair import ImagePair
+    from src.session_data import fill_pair_from_session
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    _inspect(history, path, "incoming", back, front)
+    back, front = write_inspection(tmp_path / "ship", PINHOLES, 0.5, (8, -4))
+    _insp, _report, _summary, added = _inspect(history, path, "ship", back, front)
+    assert added == []
+    pair = ImagePair()
+    fill_pair_from_session(pair, hist.session_view(history, 1, path))
+    assert pair.legend() == [("#00cc44", f"Incoming Pinholes  (n={len(PINHOLES)})"),
+                             ("#ff0088", "Incoming Repairs  (n=0)"),
+                             ("#ffff00", "Ship to NAOJ  (n=0)")]
+    # Up to the incoming inspection, the later stage is not listed.
+    fill_pair_from_session(pair, hist.session_view(history, 0, path))
+    assert [text for _c, text in pair.legend()] == [f"Incoming Pinholes  (n={len(PINHOLES)})",
+                                                     "Incoming Repairs  (n=0)"]
+
+
 def test_a_spot_also_seen_from_the_front_is_flagged(tmp_path):
     path = tmp_path / "em9.json"
     history = hist.new_history("em9")
@@ -285,7 +306,8 @@ def test_sessions_migrate_into_one_history(tmp_path):
 
     view = hist.session_view(history, 1, out)
     assert {a["label"] for a in view["annotations"]} == {"I1", "I2", "I3", "I4", "I5", "S1"}
-    assert view["colour_labels"] == {green: "Incoming Pinholes", red: "Shock Test"}
+    assert view["colour_labels"] == {green: "Incoming Pinholes", "#ff0088": "Incoming Repairs", red: "Shock Test"}
+    assert view["legend_colours"] == [green, "#ff0088", red]
 
 
 def test_migration_without_images_keeps_the_markers_as_they_were(tmp_path):

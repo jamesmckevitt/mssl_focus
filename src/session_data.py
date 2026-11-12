@@ -162,6 +162,7 @@ def fill_pair_from_session(pair, session, reference=False):
     pair.annotations = [normalise_annotation(a) for a in session.get(prefix + "annotations", [])]
     pair.colour_labels = dict(session.get(prefix + "colour_labels", {}))
     pair.label_prefixes = dict(session.get(prefix + "label_prefixes", {}))
+    pair.legend_colours = list(session.get(prefix + "legend_colours", []))
     pair.outline = []
     for point in session.get(prefix + "filter_outline") or []:
         try:

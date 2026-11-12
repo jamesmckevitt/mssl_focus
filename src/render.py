@@ -88,7 +88,67 @@ LABEL_GAP = 0.30
 LABEL_RINGS = 16          # how far out a crowded label may go, in steps of about a text height
 LABEL_DIRECTIONS = 16     # directions tried at each step
 HALO = "#000000"          # the dark rim drawn round markers and labels
+HALO_WIDTH = 0.6          # its width either side of a circle's line, as a fraction of the line's width
 SHELF = 0.14             # the line under a moved label, below the text, as a fraction of text height
+# Circles never run over another marker's pinhole.  A pinhole's spot is taken
+# to fill this fraction of its marker's radius; in a crowd a circle shrinks to
+# keep clear of its neighbours' spots (but not onto its own), and where that is
+# not enough its line is broken where it would cross one.
+RING_SPOT = 0.25
+
+
+def ring_layout(markers, stroke, halo):
+    """How to draw each marker's circle so that none covers another's pinhole.
+
+    ``markers`` are ``(cx, cy, radius)`` in output pixels, ``radius`` the circle's
+    outer edge as normally drawn.  Returns, for each, ``(r, gaps)``: the radius of
+    the circle's centre line, and the arcs left out, as ``(start, end)`` angles in
+    degrees (clockwise from 3 o'clock, as on screen); none if it is drawn whole.
+    """
+    band = stroke / 2.0 + halo          # the line and its dark rim, either side of the centre line
+    points = np.asarray([(cx, cy) for cx, cy, _r in markers], dtype=float).reshape(-1, 2)
+    spots = np.asarray([RING_SPOT * r for _cx, _cy, r in markers], dtype=float)
+    layout = []
+    for i, (cx, cy, radius) in enumerate(markers):
+        full = radius - stroke / 2.0
+        smallest = min(full, spots[i] + band + 1.0)     # its own spot stays clear inside it
+        dx, dy = points[:, 0] - cx, points[:, 1] - cy
+        dist = np.hypot(dx, dy)
+        dist[i] = np.inf
+        # Shrink until the line passes outside every neighbour's spot.
+        r = min(full, max(smallest, float(np.min(dist - band - spots)) if len(dist) > 1 else full))
+        gaps = []
+        for j in np.nonzero(np.abs(dist - r) < band + spots)[0]:
+            reach = band + spots[j]
+            cos = (r * r + dist[j] ** 2 - reach * reach) / (2.0 * r * dist[j])
+            if cos <= -1.0:
+                continue                # on top of this one: nothing a gap could show
+            half = math.degrees(math.acos(min(1.0, cos)))
+            towards = math.degrees(math.atan2(dy[j], dx[j]))
+            gaps.append((towards - half, towards + half))
+        layout.append((r, gaps))
+    return layout
+
+
+def ring_arcs(gaps):
+    """The arcs to draw, ``(start, end)`` in degrees, given the ``gaps`` to leave."""
+    if not gaps:
+        return [(0.0, 360.0)]
+    spans = sorted(((a % 360.0), (a % 360.0) + (b - a)) for a, b in gaps)
+    merged = []
+    for a, b in spans + [(a + 360.0, b + 360.0) for a, b in spans]:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    start = merged[0][0]
+    arcs = []
+    for (_a0, b0), (a1, _b1) in zip(merged, merged[1:]):
+        if b0 >= start + 360.0:
+            break
+        arcs.append((b0, min(a1, start + 360.0)))
+    turns = [360.0 * math.floor(a / 360.0) for a, _b in arcs]
+    return [(a - t, b - t) for (a, b), t in zip(arcs, turns) if b > a]
 
 # What a placement costs if it breaks a rule, worst first.  A spot that breaks
 # none is always taken in preference to any that breaks one.
@@ -326,8 +386,14 @@ def compose_export(scene, images, label_size, legend_size, line_width):
             if cx + radius < 0 or cy + radius < 0 or cx - radius > width or cy - radius > height:
                 continue
             visible.append((cx, cy, radius, ann))
+        # A dark rim round each circle and label keeps them legible where the
+        # photograph is bright (frontlit membrane, glints).
+        halo = max(1, round(stroke * HALO_WIDTH))
+        rings = ring_layout([(cx, cy, r) for cx, cy, r, _a in visible], stroke, halo)
+        visible = [(cx, cy, ring_r + stroke / 2.0, ann, ring_r, gaps)
+                   for (cx, cy, _r, ann), (ring_r, gaps) in zip(visible, rings)]
         measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        labelled = [(cx, cy, r, marker_text(a)) for cx, cy, r, a in visible if marker_text(a)]
+        labelled = [(cx, cy, r, marker_text(a)) for cx, cy, r, a, _rr, _g in visible if marker_text(a)]
         layout = label_layout(labelled, label_font, measure, width, height, stroke)
         places = iter(layout)
         for col, frame in enumerate(frames):
@@ -335,14 +401,16 @@ def compose_export(scene, images, label_size, legend_size, line_width):
             panel = frame.copy()
             panel_draw = ImageDraw.Draw(panel)
             places = iter(layout)
-            for cx, cy, radius, ann in visible:
-                # A dark rim round each circle and label keeps them legible
-                # where the photograph is bright (frontlit membrane, glints).
-                halo = max(1, round(stroke * 0.6))
-                panel_draw.ellipse([cx - radius - halo, cy - radius - halo, cx + radius + halo, cy + radius + halo],
-                                   outline=HALO, width=stroke + 2 * halo)
-                panel_draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
-                                   outline=ann["colour"], width=stroke)
+            for cx, cy, radius, ann, ring_r, gaps in visible:
+                outer, rim = ring_r + stroke / 2.0, ring_r + stroke / 2.0 + halo
+                for start, end in ring_arcs(gaps):
+                    whole = end - start >= 360.0
+                    for r, colour, line in ((rim, HALO, stroke + 2 * halo), (outer, ann["colour"], stroke)):
+                        box = [cx - r, cy - r, cx + r, cy + r]
+                        if whole:
+                            panel_draw.ellipse(box, outline=colour, width=line)
+                        else:
+                            panel_draw.arc(box, start, end, fill=colour, width=line)
                 text = marker_text(ann)
                 if not text:
                     continue

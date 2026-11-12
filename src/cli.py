@@ -245,10 +245,10 @@ def export_main(argv=None):
     out.parent.mkdir(parents=True, exist_ok=True)
     image.save(out)
     if not args.quiet:
-        counts = ", ".join(f"{name}={n}" for name, n in
-                           sorted((pair.colour_labels.get(c, c), sum(
-                               1 for a in pair.annotations if a["colour"] == c))
-                               for c in {a["colour"] for a in pair.annotations}))
+        colours = list(pair.legend_colours) + [c for c in dict.fromkeys(a["colour"] for a in pair.annotations)
+                                               if c not in pair.legend_colours]
+        counts = ", ".join(f"{pair.colour_labels.get(c, c)}={sum(1 for a in pair.annotations if a['colour'] == c)}"
+                           for c in colours)
         print(f"{out}  {image.width}x{image.height}  [{counts}]")
     return 0
 

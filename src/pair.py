@@ -57,6 +57,7 @@ class ImagePair:
         self.annotations = []
         self.colour_labels = {}
         self.label_prefixes = {}
+        self.legend_colours = []          # listed in the legend in this order, even with no markers
         self.label = ""
         self.session_path = None
         self.row_alignments = {}          # how this row lines up with other sessions shown as its reference
@@ -131,8 +132,10 @@ class ImagePair:
     # ------------------------------------------------------------------ #
 
     def legend(self):
-        """One ``(colour, text)`` entry per colour in use, with marker counts."""
-        counts, unsure = {}, {}
+        """One ``(colour, text)`` entry per colour in use, with marker counts.  The
+        colours in ``legend_colours`` come first, in that order, and are listed
+        even when nothing was found (``n=0``): a stage that was checked."""
+        counts, unsure = {colour: 0 for colour in self.legend_colours}, {}
         for ann in self.annotations:
             counts[ann["colour"]] = counts.get(ann["colour"], 0) + 1
             if ann.get("unsure"):

@@ -73,6 +73,8 @@ class SessionMixin:
             "camera_settings": [dict(c) for c in current.camera],
             "row_alignments": self._row_alignments_to_save(session_dir),
         }
+        if current.legend_colours:
+            record["legend_colours"] = list(current.legend_colours)
         return record
 
     def _row_alignments_to_save(self, session_dir):
@@ -197,6 +199,7 @@ class SessionMixin:
         current.annotations = [normalise_annotation(a) for a in view["annotations"]]
         current.colour_labels = dict(view["colour_labels"])
         current.label_prefixes = dict(view["label_prefixes"])
+        current.legend_colours = list(view["legend_colours"])
         self.session_path = path
         self.dirty = False
         self.config.add_recent(path)

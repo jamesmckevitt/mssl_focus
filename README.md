@@ -57,6 +57,8 @@ Adding an inspection lines the frontlit photograph up on the backlit one, turns 
 
 Detection adds only clear spots. On the hand-checked EM filters nearly every pinhole marked by hand is clear where it is first seen, while the fainter "likely" spots are almost all sensor noise; `--sensitivity 75` adds those too, and the window still offers them for review. Repairs are found in the frontlit photograph, where each patch shows as a round white spot, and recorded as repairs; a backlit spot on a patch is that repair letting light through, not a new pinhole.
 
+A map's legend lists every stage checked up to its inspection, with `n=0` where nothing new was found. Where pinholes crowd together their circles shrink, and break where they would cross a neighbour, so every pinhole stays visible.
+
 ## Access and Licensing
 
 This software is copyright (c) 2026 James McKevitt, UCL Mullard Space Science Laboratory. All rights reserved.

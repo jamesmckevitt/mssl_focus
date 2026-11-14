@@ -30,7 +30,7 @@ from .session_data import (fill_pair_from_session, read_session, resolve_frame_p
                            session_image_paths, shift_legacy_raw_markers)
 
 COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate", "photos",
-            "replace-photos", "remove")
+            "replace-photos", "remove", "crosscheck")
 
 
 def _say(message, quiet=False):
@@ -294,7 +294,9 @@ def _align(history, index, path, args):
 
 
 def _print_detection(insp, summary, added):
-    print(f"{insp['id']}: {summary['spots']} spot(s) at sensitivity {summary['sensitivity']}; "
+    taken = ("taken as pinholes" if summary["sensitivity"] == "auto"
+             else f"at sensitivity {summary['sensitivity']}")
+    print(f"{insp['id']}: {summary['spots']} spot(s) {taken}; "
           f"{len(added)} new, {len(summary['found_again'])} known pinhole(s) found again, "
           f"{len(summary['skipped_rejected'])} rejected spot(s) skipped")
     if added:
@@ -309,8 +311,8 @@ def _print_detection(insp, summary, added):
     if summary.get("replaced"):
         print("  replaced earlier detections: " + " ".join(summary["replaced"]))
     if summary.get("fainter"):
-        print(f"  {summary['fainter']} fainter spot(s) left out, mostly noise; --sensitivity 75 adds them "
-              "for review")
+        print(f"  {summary['fainter']} other likely spot(s) left out as soft or on glow, mostly noise; "
+              "--sensitivity 75 adds them for review")
 
 
 def _photo_paths(source, frontlit=None, quiet=False):
@@ -400,6 +402,23 @@ def cmd_detect(args):
                                             category_key=args.category, redo=args.redo)
     _print_detection(insp, summary, added)
     hist.write_history(path, history)
+    return 0
+
+
+def cmd_crosscheck(args):
+    path, history = _open(args.history)
+    if len(history["inspections"]) < 2:
+        raise SystemExit(f"{args.history}: cross-checking needs two inspections or more")
+    backlits = [_inspection_images(history, i, path, quiet=args.quiet)[BACKLIT]
+                for i in range(len(history["inspections"]))]
+    added = hist.cross_check(history, backlits)
+    for p in added:
+        print(f"  {p['id']}: first seen {p['first_seen']}, also in {', '.join(p['seen_in'][1:])}  "
+              f"at ({p['x']:.0f}, {p['y']:.0f}), {p['tier']}")
+    print(f"{len(added)} faint pinhole(s) found in more than one inspection"
+          + (" (not written)" if args.dry_run and added else ""))
+    if not args.dry_run:
+        hist.write_history(path, history)
     return 0
 
 
@@ -510,7 +529,8 @@ def _history_parser():
     q.add_argument("--filter", help="filter name, for a new history (default: the file name)")
     q.add_argument("--no-align", action="store_true", help="do not align it yet")
     q.add_argument("--detect", action="store_true", help="also search it for pinholes")
-    q.add_argument("--sensitivity", type=float, help="with --detect: 0-100 (default 50, clear spots only)")
+    q.add_argument("--sensitivity", type=float, help="with --detect: 0-100, every spot above that floor (default: clear spots, and likely "
+                        "ones that are sharp points)")
     aligning(q)
     common(q)
 
@@ -541,12 +561,18 @@ def _history_parser():
     q.add_argument("history")
     q.add_argument("inspection", nargs="?", help="ID, stage or number (default: the latest)")
     q.add_argument("--sensitivity", type=float,
-                   help="0-100: 50 adds only clear spots, 75 clear and likely, 100 everything. Default: 50, "
-                        "as likely spots are mostly sensor noise (the window still offers them for review)")
+                   help="0-100: every spot above that floor; 50 clear spots, 75 clear and likely, 100 "
+                        "everything.  Default: clear spots, and likely ones that are sharp, bright points "
+                        "on dark membrane, as soft ones are mostly sensor noise")
     q.add_argument("--category", help="category for the new pinholes (default: the inspection's)")
     q.add_argument("--redo", action="store_true",
                    help="first drop the pinholes an earlier detect added to this inspection "
                         "(rejected ones stay remembered)")
+    common(q)
+
+    q = sub.add_parser("crosscheck", help="find faint pinholes by their showing in more than one inspection")
+    q.add_argument("history")
+    q.add_argument("-n", "--dry-run", action="store_true", help="list them without writing")
     common(q)
 
     for name, verb in (("accept", "accept"), ("reject", "reject")):
@@ -574,7 +600,7 @@ def _history_parser():
 
 HANDLERS = {"add": cmd_add, "align": cmd_align, "detect": cmd_detect, "show": cmd_show,
             "migrate": cmd_migrate, "photos": cmd_photos, "replace-photos": cmd_replace_photos,
-            "remove": cmd_remove,
+            "remove": cmd_remove, "crosscheck": cmd_crosscheck,
             "accept": lambda a: _set_status(a, hist.ACCEPTED),
             "reject": lambda a: _set_status(a, hist.REJECTED)}
 

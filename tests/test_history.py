@@ -112,21 +112,55 @@ def test_a_rerun_with_redo_replaces_only_unreviewed_detections(tmp_path):
     assert hist.pinhole(history, "I3")["status"] == hist.REJECTED
 
 
-def test_only_clear_spots_are_added_unless_asked_for_fainter_ones(tmp_path):
+def test_a_faint_sharp_point_is_a_pinhole_and_a_faint_smudge_is_not(tmp_path):
     path = tmp_path / "em9.json"
     history = hist.new_history("em9")
     back, front = write_inspection(tmp_path / "incoming", PINHOLES)
-    faint = (700, 600)
-    arr = np.asarray(Image.open(back)).copy()
-    x, y = faint
-    arr[y - 3:y + 4, x - 3:x + 4] = 50          # well short of a pinhole's brightness
-    Image.fromarray(arr).save(back)
-    _insp, _report, summary, added = _inspect(history, path, "incoming", back, front)
-    assert len(added) == len(PINHOLES)
+    point, smudge = (700, 600), (620, 560)
+    arr = np.asarray(Image.open(back)).astype(np.float32)
+    yy, xx = np.mgrid[:arr.shape[0], :arr.shape[1]]
+    arr += (90 * np.exp(-((xx - point[0]) ** 2 + (yy - point[1]) ** 2) / (2 * 1.0 ** 2)))[..., None]
+    arr += (40 * np.exp(-((xx - smudge[0]) ** 2 + (yy - smudge[1]) ** 2) / (2 * 4.0 ** 2)))[..., None]
+    Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)).save(back)
+    insp, _report, summary, added = _inspect(history, path, "incoming", back, front)
+    faint = [p for p in added if p["tier"] != "clear"]
+    assert len(faint) == 1 and len(added) == len(PINHOLES) + 1
+    x, y, _r = hist.image_position(insp, faint[0])
+    assert (x, y) == pytest.approx(point, abs=1.5)
     assert summary["fainter"] == 1
+    # Asked for every likely spot, the smudge comes too, for review.
     summary, added = hist.detect_inspection(history, 0, load(back), load(front), sensitivity=75)
     assert len(added) == 1 and added[0]["tier"] == "likely"
     assert "fainter" not in summary
+
+
+def _add_point(path, centre, amplitude=60.0, sigma=1.0):
+    arr = np.asarray(Image.open(path)).astype(np.float32)
+    yy, xx = np.mgrid[:arr.shape[0], :arr.shape[1]]
+    arr += (amplitude * np.exp(-((xx - centre[0]) ** 2 + (yy - centre[1]) ** 2) / (2 * sigma ** 2)))[..., None]
+    Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)).save(path)
+
+
+def test_a_faint_pinhole_is_found_by_showing_in_two_inspections(tmp_path):
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    faint, once = (700, 600), (620, 470)          # one in both photographs, one (a hot pixel, say) in the first
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    _add_point(back, faint)
+    _add_point(back, once)
+    _inspect(history, path, "incoming", back, front)
+    tilt, shift = 0.6, (14, -9)
+    back2, front2 = write_inspection(tmp_path / "ship", PINHOLES, tilt, shift)
+    _add_point(back2, framed_position(faint, tilt, shift))
+    _insp, _report, _summary, added = _inspect(history, path, "ship", back2, front2)
+    assert added == [], "too faint to take from one photograph"
+    found = hist.cross_check(history, [load(back), load(back2)])
+    assert len(found) == 1
+    p = found[0]
+    assert p["first_seen"] == "incoming" and p["seen_in"] == ["incoming", "ship"] and p["tier"] == "faint"
+    x, y, _r = hist.image_position(history["inspections"][0], p)
+    assert (x, y) == pytest.approx(faint, abs=1.5)
+    assert hist.cross_check(history, [load(back), load(back2)]) == [], "found once only"
 
 
 def test_repairs_are_found_from_the_front(tmp_path):

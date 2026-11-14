@@ -44,7 +44,8 @@ python mssl_focus.py photos 5_thermal_test/em2                      # which RAW 
 python mssl_focus.py add em2 thermal 5_thermal_test/em2              # chooses them, aligns automatically
 python mssl_focus.py replace-photos em2 thermal 5_thermal_test/em2   # other photos of an inspection
 python mssl_focus.py remove em2 thermal                              # with the pinholes first seen there
-python mssl_focus.py detect em2 thermal                              # clear spots only unless --sensitivity
+python mssl_focus.py detect em2 thermal                              # sharp points; --sensitivity for every spot
+python mssl_focus.py crosscheck em2                                  # faint ones, seen in two inspections or more
 python mssl_focus.py reject em2 T4 T7                                # or: accept em2 T7
 python mssl_focus.py show em2 --pinholes
 python mssl_focus.py export em2 --inspection thermal -o map.png      # everything known up to it
@@ -55,7 +56,7 @@ Given a folder, the photographs are chosen from its RAW files (TIFF and JPEG cop
 
 Adding an inspection lines the frontlit photograph up on the backlit one, turns the filter upright by its frame, finds the outline of the membrane from the frame's opening, and places the inspection on the filter using the pinholes already known. Run any command with `-h` for its options.
 
-Detection adds only clear spots. On the hand-checked EM filters nearly every pinhole marked by hand is clear where it is first seen, while the fainter "likely" spots are almost all sensor noise; `--sensitivity 75` adds those too, and the window still offers them for review. Repairs are found in the frontlit photograph, where each patch shows as a round white spot, and recorded as repairs; a backlit spot on a patch is that repair letting light through, not a new pinhole.
+Detection takes clear spots, and fainter "likely" ones when they are sharp, bright points on dark membrane: a pinhole is a point of light, while sensor noise in a dark, strongly stretched photograph and the texture of stray-light glow make soft smudges. `--sensitivity 75` takes every likely spot instead, and the window still offers them all for review. A pinhole too faint to tell from noise in one photograph shows as a sharp point at the same place on the filter in its other inspections, which noise and hot pixels do not; `crosscheck` finds those. Repairs are found in the frontlit photograph, where each patch shows as a round white spot, and recorded as repairs; a backlit spot on a patch is that repair letting light through, not a new pinhole.
 
 A map's legend lists every stage checked up to its inspection, with `n=0` where nothing new was found. Where pinholes crowd together their circles shrink, and break where they would cross a neighbour, so every pinhole stays visible.
 

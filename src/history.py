@@ -72,13 +72,11 @@ FRONTLIT_REACH = 6.0      # backlit pixels: a frontlit spot this close flags a c
 SEARCH_PAD = 80           # pixels searched beyond the outline, so spots on its edge are judged fairly
 SPOT_LIMIT = 12000
 MARKER_RADIUS = 20.0      # backlit pixels: the circle drawn round a new pinhole, as in the window
-# Detection without a window adds only clear spots unless asked for more.  On
-# eleven hand-checked inspections (EM1-EM4), 205 of the 219 pinholes marked by
-# hand score clear (3.0 or more) where first seen, and only 19 unmarked spots
-# do; between likely and clear (2.0-3.0) there were 7 marked pinholes and about
-# 780 unmarked spots, nearly all sensor noise in dark, strongly stretched frames.
+# Detection without a window takes clear spots, and likely ones that are sharp,
+# bright points on dark membrane (``detect.looks_like_pinhole``); most likely
+# spots in a dark, strongly stretched frame are soft smudges of sensor noise.  A
+# sensitivity given instead takes every spot scoring above its floor, for review.
 # In the window every likely spot is still offered, for review by eye.
-AUTO_SENSITIVITY = 50
 
 _ID_PATTERN = re.compile(r"^(.*?)(\d+)$")
 
@@ -686,8 +684,7 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
     are found in the frontlit image, as white patches, and recorded as repairs;
     a backlit spot on one is that repair letting light through, not a new pinhole.
     """
-    from .detect import DEFAULT_SENSITIVITY, find_patches, flag_present_in, minimum_score
-    sensitivity = AUTO_SENSITIVITY if sensitivity is None else sensitivity
+    from .detect import DEFAULT_SENSITIVITY, find_patches, flag_present_in, looks_like_pinhole, minimum_score
     insp = history["inspections"][index]
     matrix = to_filter(insp)
     outline = insp.get("outline") or []
@@ -707,8 +704,11 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
         history["pinholes"] = keep
 
     spots = find_spots(backlit, outline)
-    floor = minimum_score(sensitivity)
-    offered = [c for c in spots if c["score"] >= floor]
+    if sensitivity is None:
+        offered = [c for c in spots if looks_like_pinhole(c)]
+    else:
+        floor = minimum_score(sensitivity)
+        offered = [c for c in spots if c["score"] >= floor]
 
     patches = []
     if frontlit is not None:
@@ -789,7 +789,7 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
 
     summary = {
         "date": datetime.date.today().isoformat(),
-        "sensitivity": sensitivity,
+        "sensitivity": "auto" if sensitivity is None else sensitivity,
         "spots": len(offered),
         "new": [p["id"] for p in added],
         "found_again": sorted(found_again, key=_id_order),
@@ -805,12 +805,89 @@ def detect_inspection(history, index, backlit, frontlit=None, sensitivity=None, 
         summary["replaced"] = removed
     # Spots the window would offer for review that were left out here.
     likely = minimum_score(DEFAULT_SENSITIVITY)
-    if likely < floor:
-        fainter = [c for c in spots if likely <= c["score"] < floor
-                   and _nearest(everything, *geo.apply(matrix, c["x"], c["y"]))[0] is None]
+    taken = {id(c) for c in offered}
+    fainter = [c for c in spots if c["score"] >= likely and id(c) not in taken and not _under_patch(c, patches)
+               and _nearest(everything, *geo.apply(matrix, c["x"], c["y"]))[0] is None]
+    if fainter:
         summary["fainter"] = len(fainter)
     insp["detection"] = summary
     return summary, added
+
+
+CROSS_REACH = 10.0        # filter pixels: sharp points this close in two inspections are one pinhole
+CROSS_POINT = 40.0        # 8-bit levels: how bright a faint point must be at its centre to count
+
+
+def cross_check(history, backlits):
+    """Find faint pinholes by their showing in more than one inspection.
+
+    A pinhole too faint to tell from noise in one photograph is still a sharp
+    point at the same place on the filter in the others, which noise and hot
+    pixels are not.  ``backlits`` holds each inspection's backlit image (None to
+    leave one out).  Sharp points not yet recorded that show in two or more
+    inspections become pinholes, first seen in the earliest; returns them.
+    """
+    from .detect import GLOW, SHARPNESS
+    found = []                      # per inspection: (fx, fy, score)
+    for index, (insp, image) in enumerate(zip(history["inspections"], backlits)):
+        matrix = to_filter(insp)
+        outline = insp.get("outline") or []
+        if image is None or matrix is None or len(outline) < 3:
+            found.append([])
+            continue
+        scale = geo.scale_of(matrix)
+        known = [image_position(insp, p) for p in history["pinholes"]]
+        points = []
+        for c in find_spots(image, outline):
+            if c["sharpness"] < SHARPNESS or c["point"] < CROSS_POINT or c["glow"] > GLOW:
+                continue
+            if any(math.hypot(c["x"] - x, c["y"] - y) <= max(r, MATCH_REACH / scale) for x, y, r in known):
+                continue
+            fx, fy = geo.apply(matrix, c["x"], c["y"])
+            points.append((fx, fy, c["score"]))
+        found.append(points)
+
+    groups = []                     # {"points": [(index, fx, fy, score)]}
+    for index, points in enumerate(found):
+        for fx, fy, score in points:
+            best, best_d = None, CROSS_REACH
+            for g in groups:
+                if any(i == index for i, *_rest in g["points"]):
+                    continue
+                gx = sum(p[1] for p in g["points"]) / len(g["points"])
+                gy = sum(p[2] for p in g["points"]) / len(g["points"])
+                d = math.hypot(fx - gx, fy - gy)
+                if d <= best_d:
+                    best, best_d = g, d
+            if best is None:
+                groups.append({"points": [(index, fx, fy, score)]})
+            else:
+                best["points"].append((index, fx, fy, score))
+
+    added = []
+    confirmed = [g for g in groups if len({p[0] for p in g["points"]}) >= 2]
+    confirmed.sort(key=lambda g: (min(p[0] for p in g["points"]), min(p[1] for p in g["points"])))
+    for g in confirmed:
+        first = min(p[0] for p in g["points"])
+        insp = history["inspections"][first]
+        cat = category(history, insp.get("category") or STAGES[insp["stage"]][1])
+        score = max(p[3] for p in g["points"])
+        record = {
+            "id": next_id(history, cat["prefix"]),
+            "category": cat["key"],
+            "first_seen": insp["id"],
+            "status": ACCEPTED,
+            "x": round(sum(p[1] for p in g["points"]) / len(g["points"]), 2),
+            "y": round(sum(p[2] for p in g["points"]) / len(g["points"]), 2),
+            "radius": round(MARKER_RADIUS * geo.scale_of(to_filter(insp)), 2),
+            "source": "cross-checked",
+            "score": round(score, 2),
+            "tier": "clear" if score > 3.0 else "likely" if score > 2.0 else "faint",
+            "seen_in": [history["inspections"][i]["id"] for i in sorted({p[0] for p in g["points"]})],
+        }
+        history["pinholes"].append(record)
+        added.append(record)
+    return added
 
 
 def _under_patch(spot, patches, margin=4.0):

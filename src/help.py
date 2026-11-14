@@ -96,6 +96,10 @@ GUIDE = [
         "- Keep the session file in the same folder as its images.  The session then still opens "
         "after the folder is moved, renamed or synced to another computer.",
         "- A star in the title bar means there are unsaved changes.",
+        "- A filter history (for example em2.json, made from the command line) opens the same way: "
+        "choose an inspection and it shows every pinhole known up to it.  Ctrl+S saves back into the "
+        "history: moved markers move their pinhole, new markers become new pinholes, and a deleted "
+        "marker rejects its pinhole, so it is skipped when found again.",
     ]),
     ("7.  Compare with an earlier inspection", [
         "To see what a test did to a filter, show the earlier inspection underneath the new one.",

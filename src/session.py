@@ -1,6 +1,10 @@
-"""Session files: reading, writing, locating images, and the session commands."""
+"""Session files: the session commands in the window.
 
-import json
+Reading, writing and locating the files a session refers to live in
+``session_data.py``, which has no user-interface dependency so the command line
+can use it too; they are re-exported here so existing imports keep working.
+"""
+
 import os
 import tkinter as tk
 from pathlib import Path
@@ -12,217 +16,32 @@ from .camera import camera_differences, describe_camera, exposure_stops
 from .imaging import IMAGE_FILETYPES, is_raw
 from .metadata import APP_VERSION
 from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
+from . import history as hist
+from .session_data import (CURRENT, RAW_CROP_VERSION, REFERENCE, SESSION_VERSION,
+                           SETTINGS_FILE_TYPE, alignment_key, describe_location,
+                           describe_saved_reference, develop_record, fill_pair_from_session,
+                           read_session, relative_to, resolve_frame_paths, resolve_image_path,
+                           row_alignments_from_session, row_matrix_from_record,
+                           session_has_reference, session_image_paths,
+                           shift_legacy_raw_markers, write_session, _float, _pair_of)
 
-SESSION_FILETYPES = [("Session file", "*.json"), ("All files", "*.*")]
-SESSION_VERSION = 3      # 3: a session holds one inspection (one row); earlier ones could hold two
-RAW_CROP_VERSION = 2     # before this, markers were placed on the uncropped RAW frame
-CURRENT, REFERENCE = 0, 1
-SETTINGS_FILE_TYPE = "mssl_focus_image_settings"
+SESSION_FILETYPES = [("Session or filter history", "*.json"), ("All files", "*.*")]
 SETTINGS_FILETYPES = [("Image settings or session", "*.json"), ("All files", "*.*")]
 
 
-# --------------------------------------------------------------------------- #
-# Pure helpers
-# --------------------------------------------------------------------------- #
-
-def read_session(path):
-    with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict):
-        raise ValueError("this is not a MSSL FOCUS session file")
-    return data
-
-
-def write_session(path, data):
-    """Write atomically so a crash or sync conflict cannot leave half a file."""
-    path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
-    os.replace(tmp, path)
-
-
-def describe_location(path):
-    """Short human label from a file's folders, e.g. ``5_thermal_test / em2``."""
-    if not path:
-        return ""
-    parent = Path(path).resolve().parent
-    if parent.parent.name:
-        return f"{parent.parent.name} / {parent.name}"
-    return parent.name
-
-
-def relative_to(path, base_dir):
-    if not path:
-        return None
+def _same_file(a, b):
     try:
-        return os.path.relpath(path, base_dir).replace("\\", "/")
-    except ValueError:  # different drive on Windows
-        return None
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
 
 
-def resolve_image_path(saved, relative, session_dir):
-    """Find an image named in a session file, even after folders were moved or renamed."""
-    session_dir = Path(session_dir)
-    candidates = []
-    if relative:
-        candidates.append(session_dir / relative)
-    if saved:
-        candidates.append(Path(saved))
-        parts = Path(str(saved).replace("\\", "/")).parts
-        # Same file name beside the session, then progressively more of the old folder tail.
-        for depth in range(1, min(4, len(parts)) + 1):
-            base = session_dir
-            for _ in range(depth - 1):
-                base = base.parent
-            candidates.append(base.joinpath(*parts[-depth:]))
-    for candidate in candidates:
-        try:
-            if candidate.is_file():
-                return str(candidate)
-        except OSError:
-            continue
-    return None
-
-
-def _pair_of(values):
-    values = list(values or [])[:2]
-    while len(values) < 2:
-        values.append(None)
-    return values
-
-
-def session_image_paths(session, session_path, reference=False):
-    """Return ``(resolved, saved)`` image path pairs for a session's main or reference row."""
-    key = "compare_image_paths" if reference else "image_paths"
-    saved = _pair_of(session.get(key))
-    relative = _pair_of(session.get(key + "_rel"))
-    session_dir = Path(session_path).resolve().parent
-    resolved = [resolve_image_path(s, r, session_dir) if (s or r) else None
-                for s, r in zip(saved, relative)]
-    saved = [s or r for s, r in zip(saved, relative)]
-    return resolved, saved
-
-
-def session_has_reference(session):
-    """Whether a session from an earlier version also holds a second (reference) row."""
-    return bool(session.get("compare_row_enabled")) or any(_pair_of(session.get("compare_image_paths")))
-
-
-def describe_saved_reference(session):
-    """What the second row of an earlier, two-row session was, for telling the user."""
-    label = session.get("compare_label") or ""
-    names = [Path(str(p).replace("\\", "/")).name for p in _pair_of(session.get("compare_image_paths")) if p]
-    files = ", ".join(names)
-    return f"{label} ({files})" if label and files else label or files or "unnamed"
-
-
-def alignment_key(other_session_path, session_dir):
-    """How a session refers to another session it has been lined up with."""
-    return relative_to(other_session_path, session_dir) or str(other_session_path)
-
-
-def row_alignments_from_session(session):
-    """How this session's row lines up with other sessions shown as its reference row:
-    ``{key of the other session: record}``.  A two-row session from an earlier version
-    stored one such alignment with its reference row; that one is kept too."""
-    found = {}
-    stored = session.get("row_alignments")
-    if isinstance(stored, dict):
-        found.update({str(key): dict(value) for key, value in stored.items() if isinstance(value, dict)})
-    other = session.get("compare_session_path_rel")
-    transform = session.get("compare_row_transform")
-    if other and isinstance(transform, dict) and other not in found and session_has_reference(session):
-        found[str(other)] = {
-            "off_x": _float(transform.get("off_x"), 0.0),
-            "off_y": _float(transform.get("off_y"), 0.0),
-            "rot": _float(transform.get("rot"), 0.0),
-            "scale": _float(transform.get("scale"), 1.0),
-            "current_rotation": _float((session.get("alignment") or {}).get("glob_rot"), 0.0),
-            "reference_rotation": _float((session.get("compare_alignment") or {}).get("glob_rot"), 0.0),
-        }
-    return found
-
-
-def row_matrix_from_record(record, current, reference):
-    """The matrix taking ``reference``'s pair space to ``current``'s, from a saved
-    alignment record, allowing for either row having been levelled differently since."""
-    centre_c, centre_r = current.centre(BACKLIT), reference.centre(BACKLIT)
-    saved = geo.translation(_float(record.get("off_x"), 0.0), _float(record.get("off_y"), 0.0)) @ geo.about(
-        centre_r, max(0.01, _float(record.get("scale"), 1.0)), _float(record.get("rot"), 0.0))
-    turned_c = current.glob_rot - _float(record.get("current_rotation"), current.glob_rot)
-    turned_r = reference.glob_rot - _float(record.get("reference_rotation"), reference.glob_rot)
-    return geo.about(centre_c, 1.0, turned_c) @ saved @ geo.about(centre_r, 1.0, -turned_r)
-
-
-def fill_pair_from_session(pair, session, reference=False):
-    """Copy a session's alignment, tone, noise and annotation records into ``pair``."""
-    prefix = "compare_" if reference else ""
-    pair.apply_alignment_record(session.get(prefix + "alignment"))
-    pair.apply_adjust_records(session.get(prefix + "adjustments"))
-    pair.apply_nr_records(session.get(prefix + "noise_reduction"))
-    pair.apply_develop_records(session.get(prefix + "raw_develop"))
-    pair.annotations = [normalise_annotation(a) for a in session.get(prefix + "annotations", [])]
-    pair.colour_labels = dict(session.get(prefix + "colour_labels", {}))
-    pair.label_prefixes = dict(session.get(prefix + "label_prefixes", {}))
-    pair.outline = []
-    for point in session.get(prefix + "filter_outline") or []:
-        try:
-            pair.outline.append([float(point[0]), float(point[1])])
-        except (TypeError, ValueError, IndexError):
-            pair.outline = []
-            break
-
-
-def shift_legacy_raw_markers(pair, session, base_image):
-    """Sessions from v1.x placed markers on the uncropped RAW frame; RAW files are now
-    cropped to the camera's image area, so move those markers by the crop margin."""
-    if int(_float(session.get("version"), 1)) >= RAW_CROP_VERSION or not is_raw(pair.paths[BACKLIT]):
-        return
-    left, top = getattr(base_image, "info", {}).get("raw_crop_margins", (0, 0))
-    for ann in pair.annotations:
-        ann["img1_x"] -= left
-        ann["img1_y"] -= top
-
-
-def develop_record(develop, session_dir):
-    """A development recipe as stored in a session: frame paths both absolute and relative."""
-    record = dict(develop)
-    for key in ("frames", "dark"):
-        record[key] = list(develop.get(key) or [])
-        record[key + "_rel"] = [relative_to(p, session_dir) for p in record[key]]
-    return record
-
-
-def resolve_frame_paths(pair, records, session_dir):
-    """Locate the extra frames and dark frames named in a session.  Returns how many are missing."""
-    missing = 0
-    for i in range(2):
-        record = records[i] if isinstance(records, list) and i < len(records) and isinstance(records[i], dict) else {}
-        for key in ("frames", "dark"):
-            saved = list(record.get(key) or [])
-            relative = list(record.get(key + "_rel") or [])
-            found = []
-            for n, path in enumerate(saved):
-                located = resolve_image_path(path, relative[n] if n < len(relative) else None, session_dir)
-                if located:
-                    found.append(located)
-                else:
-                    missing += 1
-            pair.develop[i][key] = found
-    return missing
-
-
-def _float(value, default):
+def _is_history_file(path):
     try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+        return Path(path).is_file() and hist.is_history(read_session(path))
+    except (OSError, ValueError):
+        return False
 
-
-# --------------------------------------------------------------------------- #
-# Session commands
-# --------------------------------------------------------------------------- #
 
 class SessionMixin:
     def _session_record(self, session_path):
@@ -254,6 +73,8 @@ class SessionMixin:
             "camera_settings": [dict(c) for c in current.camera],
             "row_alignments": self._row_alignments_to_save(session_dir),
         }
+        if current.legend_colours:
+            record["legend_colours"] = list(current.legend_colours)
         return record
 
     def _row_alignments_to_save(self, session_dir):
@@ -324,6 +145,15 @@ class SessionMixin:
         return self._write_session(path)
 
     def _write_session(self, path):
+        current = self.pairs[CURRENT]
+        if current.history_inspection and current.session_path and _same_file(path, current.session_path):
+            return self._write_history(path)
+        if _is_history_file(path):
+            messagebox.showerror(
+                "Save session",
+                f"{os.path.basename(path)} is a filter history, not a session.  Choose another name; "
+                "a history is only saved over from one of its own inspections.", parent=self.root)
+            return None
         record = self._session_record(path)
         try:
             write_session(path, record)
@@ -334,6 +164,7 @@ class SessionMixin:
         self.pairs[0].row_alignments = record["row_alignments"]
         self.session_path = path
         self.pairs[0].session_path = path
+        self.pairs[0].history_inspection = None     # saved as a session of its own now
         self.pairs[0].label = describe_location(path)
         self.dirty = False
         self.config.add_recent(path)
@@ -343,6 +174,91 @@ class SessionMixin:
         self._draw_overlays()
         self.set_status(f"Session saved: {path}")
         return path
+
+    def _write_history(self, path):
+        """Save the current row back into the filter history it was opened from."""
+        current = self.pairs[CURRENT]
+        base = Path(path).resolve().parent
+        try:
+            history = hist.read_history(path)      # afresh: the command line may have changed it
+            index = hist.inspection_index(history, current.history_inspection)
+            summary = hist.apply_view(
+                history, index, current.annotations,
+                outline=current.outline,
+                alignment=current.alignment_record(),
+                adjustments=[dict(a) for a in current.adjust],
+                noise_reduction=[dict(n) for n in current.nr],
+                raw_develop=[develop_record(d, base) for d in current.develop])
+            hist.write_history(path, history)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Save to history", f"Could not save to the history:\n{path}\n\n{exc}",
+                                 parent=self.root)
+            return None
+        # Show the markers as the history now has them: new IDs, rejected ones gone.
+        view = hist.session_view(history, index, path)
+        current.annotations = [normalise_annotation(a) for a in view["annotations"]]
+        current.colour_labels = dict(view["colour_labels"])
+        current.label_prefixes = dict(view["label_prefixes"])
+        current.legend_colours = list(view["legend_colours"])
+        self.session_path = path
+        self.dirty = False
+        self.config.add_recent(path)
+        self._remember_dir(path)
+        self._refresh_recent_menu()
+        self._update_title()
+        self._draw_overlays()
+        changes = [f"{len(summary[key])} {key}" for key in ("added", "moved", "rejected", "recategorised")
+                   if summary[key]]
+        self.set_status(f"Saved to {os.path.basename(path)}, inspection {current.history_inspection}"
+                        + (f": {', '.join(changes)}." if changes else "."))
+        return path
+
+    def _choose_inspection(self, history, title):
+        """Ask which inspection of a history to open.  Returns its index, or None."""
+        inspections = history["inspections"]
+        if not inspections:
+            messagebox.showinfo(title, "That history has no inspections yet.", parent=self.root)
+            return None
+        if len(inspections) == 1:
+            return 0
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.configure(bg=theme.PANEL)
+        dialog.transient(self.root)
+        pad = self.px(14)
+        ttk.Label(dialog, text=f"Filter {history.get('filter') or ''}: which inspection?\n"
+                               "It opens with every pinhole known up to it.",
+                  justify=tk.LEFT).pack(anchor=tk.W, padx=pad, pady=(pad, self.px(8)))
+        listbox = tk.Listbox(dialog, height=min(12, len(inspections)), width=60, exportselection=False,
+                             bg=theme.FIELD, fg=theme.TEXT, highlightthickness=0,
+                             selectbackground=theme.ACCENT)
+        for n, insp in enumerate(inspections):
+            known = len(hist.known_at(history, n))
+            listbox.insert(tk.END, f"{n + 1}.  {insp.get('name') or insp['id']}   {insp.get('date') or ''}"
+                                   f"   ({known} pinholes known)")
+        listbox.selection_set(len(inspections) - 1)
+        listbox.see(len(inspections) - 1)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=pad)
+        outcome = {"index": None}
+
+        def accept(_event=None):
+            chosen = listbox.curselection()
+            if chosen:
+                outcome["index"] = chosen[0]
+            dialog.destroy()
+
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=pad, pady=pad)
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Open", style="Accent.TButton", command=accept).pack(
+            side=tk.RIGHT, padx=(0, self.px(8)))
+        listbox.bind("<Double-Button-1>", accept)
+        dialog.bind("<Return>", accept)
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        self._centre_dialog(dialog)
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        return outcome["index"]
 
     def _confirm_discard(self, action):
         """Offer to save unsaved work before ``action``.  False means cancel the action."""
@@ -471,9 +387,12 @@ class SessionMixin:
             lines += ["", "Saving will rewrite the file with the one row only."]
         return messagebox.askokcancel(title, "\n".join(lines), icon="warning", parent=self.root)
 
-    def open_session(self, path=None, row=CURRENT):
+    def open_session(self, path=None, row=CURRENT, inspection=None):
         """Load a session -- one inspection's images, alignment and markers -- into the
-        current row, or into the reference row to compare against.  The other row stays."""
+        current row, or into the reference row to compare against.  The other row stays.
+
+        ``path`` may also be a filter history; ``inspection`` then names the inspection
+        to open (by ID, stage or number), else the user is asked."""
         title = "Load session into reference row" if row == REFERENCE else "Open session"
         if row == CURRENT and not self._confirm_discard("open another session"):
             return
@@ -484,6 +403,27 @@ class SessionMixin:
         if session is None:
             return
         self._remember_dir(path)
+        history_inspection = history_label = None
+        if hist.is_history(session):
+            try:
+                history = hist.read_history(path)
+                index = (hist.inspection_index(history, inspection) if inspection is not None
+                         else self._choose_inspection(history, title))
+            except (OSError, ValueError) as exc:
+                messagebox.showerror(title, f"Could not open the history:\n{path}\n\n{exc}", parent=self.root)
+                return
+            if index is None:
+                return
+            insp = history["inspections"][index]
+            if hist.to_filter(insp) is None:
+                messagebox.showinfo(title, f"Inspection {insp['id']} has not been aligned yet, so its pinholes "
+                                           "cannot be placed.  Align it from the command line first:\n\n"
+                                           f"    python mssl_focus.py align {os.path.basename(path)} {insp['id']}",
+                                    parent=self.root)
+                return
+            session = hist.session_view(history, index, path)
+            history_inspection = insp["id"]
+            history_label = f"{history.get('filter') or Path(path).stem} / {insp.get('name') or insp['id']}"
         if session_has_reference(session) and not self._confirm_two_row_session(title, session, path, row):
             return
 
@@ -501,8 +441,9 @@ class SessionMixin:
         fill_pair_from_session(pair, session)
         missing_frames = resolve_frame_paths(pair, session.get("raw_develop"), Path(path).resolve().parent)
         pair.row_alignments = row_alignments_from_session(session)
-        pair.label = describe_location(path)
+        pair.label = history_label or describe_location(path)
         pair.session_path = path
+        pair.history_inspection = history_inspection
         jobs = [((row, idx), image_path, pair.nr[idx], pair.develop[idx])
                 for idx, image_path in enumerate(final) if image_path]
 

@@ -38,6 +38,69 @@ def make_filter_image(size=(1200, 800), dots=(), rotation=0.0, shift=(0, 0), sca
     return img
 
 
+FRAMED_SIZE = (1500, 1000)
+OPENING = (750.0, 500.0, 660.0, 600.0, 60.0)      # centre x, y, width, height, corner radius
+PLATE = (860.0, 800.0)                            # the frame plate around the opening
+
+
+def make_framed_filter(lit="back", pinholes=(), tilt=0.0, shift=(0.0, 0.0), turned=False,
+                       size=FRAMED_SIZE, membrane=None, inner_box=None, seed=0):
+    """A filter in its frame as the camera sees it, lit from behind or in front.
+
+    The frame plate (with a screw in each corner) holds a rounded-rectangle
+    opening; behind it, a mount brighter than the plate.  ``pinholes`` are
+    ``(x, y)`` in the upright, unshifted picture; they show as bright dots when
+    backlit only.  The whole picture is then turned by ``tilt`` degrees
+    (clockwise) about its centre, half a turn more if ``turned``, and moved by
+    ``shift``; see ``framed_position``.  ``inner_box`` draws a rectangle inside the
+    opening (a reflection with straight edges).
+    """
+    width, height = size
+    cx, cy, ow, oh, radius = OPENING
+    pw, ph = PLATE
+    rng = np.random.default_rng(seed)
+    if lit == "back":
+        outside, plate, inside, screw = 70, 8, 14, 45
+    else:
+        outside, plate, inside, screw = 225, 95, 35, 190
+    if membrane is not None:
+        inside = membrane
+    img = Image.new("L", size, outside)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2], fill=plate)
+    draw.rounded_rectangle([cx - ow / 2, cy - oh / 2, cx + ow / 2, cy + oh / 2], radius=radius, fill=inside)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            x, y = cx + sx * (pw / 2 - 35), cy + sy * (ph / 2 - 35)
+            draw.ellipse([x - 22, y - 22, x + 22, y + 22], fill=screw)
+            draw.ellipse([x - 9, y - 9, x + 9, y + 9], fill=plate)
+    if inner_box is not None:
+        draw.rectangle(inner_box, fill=inside + (60 if inside < 128 else -60))
+    if lit == "back":
+        for x, y in pinholes:
+            draw.ellipse([x - 2.5, y - 2.5, x + 2.5, y + 2.5], fill=255)
+    else:
+        for _ in range(40):     # dust on the membrane, seen only from the front
+            x = cx + rng.uniform(-ow / 2 + 20, ow / 2 - 20)
+            y = cy + rng.uniform(-oh / 2 + 20, oh / 2 - 20)
+            draw.ellipse([x - 1.5, y - 1.5, x + 1.5, y + 1.5], fill=200)
+    angle = tilt + (180.0 if turned else 0.0)
+    img = img.rotate(-angle, resample=Image.BICUBIC, center=(width / 2, height / 2),
+                     translate=tuple(shift), fillcolor=outside)
+    arr = np.asarray(img, dtype=np.float32) + rng.normal(0, 1.5, (height, width))
+    grey = np.clip(arr, 0, 255).astype(np.uint8)
+    return Image.fromarray(np.dstack([grey] * 3))
+
+
+def framed_position(point, tilt=0.0, shift=(0.0, 0.0), turned=False, size=FRAMED_SIZE):
+    """Where ``make_framed_filter`` draws an upright point given the same placement."""
+    angle = math.radians(tilt + (180.0 if turned else 0.0))
+    cx, cy = size[0] / 2, size[1] / 2
+    dx, dy = point[0] - cx, point[1] - cy
+    return (cx + dx * math.cos(angle) - dy * math.sin(angle) + shift[0],
+            cy + dx * math.sin(angle) + dy * math.cos(angle) + shift[1])
+
+
 def dot_centroid(img, near, window=12):
     """Centre of brightness near an expected position, in pixels."""
     arr = np.asarray(img.convert("L"), dtype=float)

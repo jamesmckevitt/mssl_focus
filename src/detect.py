@@ -42,6 +42,19 @@ MAX_AREA = 900        # larger is a tear, an edge or stray light, not a pinhole
 MAX_BACKGROUND = 90   # ignore regions flooded with light (frame edges, leaks)
 COARSE = 8            # background and noise are estimated at 1/8 scale
 
+# Telling a pinhole from noise.  A pinhole is a point of light: most of a spot's
+# light lies within SHARP_INNER pixels of its centre (of what lies within
+# SHARP_OUTER).  Sensor noise in a dark, strongly stretched frame and the
+# texture of stray-light glow make soft smudges instead, which can still reach
+# a likely or even clear score.  Judged by eye on all fifteen EM and FM
+# inspections, likely spots that are this sharp and this bright were pinholes
+# 97 times in 101, and noise 13 times in 381.
+SHARP_INNER, SHARP_OUTER = 2, 6
+SHARPNESS = 0.45      # share of the light within SHARP_INNER
+POINT = 50.0          # 8-bit levels above the background at its brightest pixel
+GLOW = 6.0            # mean level of the surroundings, above the image's usual level, that is glow
+GLOW_SPAN = 25        # surroundings, in pixels at 1/COARSE scale
+
 
 def find_pinholes(image, mask=None, limit=4000):
     """Return ``(candidates, total)`` for ``image`` (a PIL image), surest and brightest first.
@@ -76,6 +89,14 @@ def find_pinholes(image, mask=None, limit=4000):
     # The blur above cuts pixel noise to roughly a quarter.
     noise_after_blur = np.maximum(noise * 0.25, 0.4)
 
+    # Stray light round a spot: the mean level over a wide neighbourhood, above
+    # the image's usual level (the dark membrane).
+    glow = cv2.resize(cv2.blur(small, (GLOW_SPAN, GLOW_SPAN)) - float(np.median(small)), (width, height),
+                      interpolation=cv2.INTER_LINEAR)
+    sharp_residual = grey - background
+    ring_y, ring_x = np.mgrid[-SHARP_OUTER:SHARP_OUTER + 1, -SHARP_OUTER:SHARP_OUTER + 1]
+    ring_r = np.hypot(ring_x, ring_y)
+
     _name, faint_sigmas, faint_contrast = TIERS[-1]
     found = (residual > np.maximum(faint_sigmas * noise_after_blur, faint_contrast)) & (background < MAX_BACKGROUND)
     if mask is not None:
@@ -100,6 +121,16 @@ def find_pinholes(image, mask=None, limit=4000):
         # threshold, so a single hot pixel, however bright, never counts as more than faint.
         third = float(np.sort(patch, axis=None)[-MIN_AREA])
         score = max(1.0, min(_level(third / local_noise, *_SIGMAS), _level(third, *_CONTRASTS)))
+        # How point-like it is, on the unblurred image: the share of its light
+        # within 2 pixels of its centre, and its brightest pixel near there.
+        xi, yi = int(round(cx + 0.5)), int(round(cy + 0.5))
+        ya, yb = max(0, yi - SHARP_OUTER), min(height, yi + SHARP_OUTER + 1)
+        xa, xb = max(0, xi - SHARP_OUTER), min(width, xi + SHARP_OUTER + 1)
+        win = sharp_residual[ya:yb, xa:xb]
+        dist = ring_r[ya - yi + SHARP_OUTER:yb - yi + SHARP_OUTER, xa - xi + SHARP_OUTER:xb - xi + SHARP_OUTER]
+        light = np.clip(win, 0, None)
+        sharpness = float(light[dist <= SHARP_INNER].sum() / max(1e-6, light.sum()))
+        point = float(win[dist <= 4].max()) if win.size else 0.0
         candidates.append({
             "x": cx + 0.5,
             "y": cy + 0.5,
@@ -108,9 +139,25 @@ def find_pinholes(image, mask=None, limit=4000):
             "snr": peak / local_noise,
             "score": score,
             "tier": "clear" if score > 3.0 else "likely" if score > 2.0 else "faint",
+            "sharpness": sharpness,
+            "point": point,
+            "glow": float(glow[min(height - 1, yi), min(width - 1, xi)]),
         })
     candidates.sort(key=lambda c: -c["score"])
     return candidates[:limit], len(candidates)
+
+
+def looks_like_pinhole(candidate):
+    """Whether a spot found by ``find_pinholes`` should be taken as a pinhole
+    without review.  A clear spot is, unless it is a soft patch on glowing stray
+    light; a likely one only if it is a sharp, bright point on dark membrane."""
+    sharp = candidate.get("sharpness", 1.0) >= SHARPNESS
+    glowing = candidate.get("glow", 0.0) > GLOW
+    if candidate["score"] >= 3.0:
+        return sharp or not glowing
+    if candidate["score"] >= 2.0:
+        return sharp and candidate.get("point", 255.0) >= POINT and not glowing
+    return False
 
 
 def split_by_markers(candidates, markers, tolerance=12.0):
@@ -213,6 +260,60 @@ def realign_markers(markers, candidates, tolerance=12.0):
     positions = [(float(matched[m]["x"]), float(matched[m]["y"])) if m in matched
                  else (float(markers[m][0]), float(markers[m][1])) for m in range(len(markers))]
     return positions, set(matched)
+
+# A repair seen from the front: a round, nearly saturated white patch, far
+# bigger than dust.  Checked on EM1-EM4, these limits find all twelve repairs
+# marked by hand and nothing else; dust, glints and mesh crossings are smaller,
+# dimmer or ragged.
+PATCH_CONTRAST = 80       # 8-bit levels above the surrounding membrane
+PATCH_MIN_AREA = 100      # pixels
+PATCH_MAX_AREA = 2500
+PATCH_BRIGHTNESS = 210    # mean level over the patch
+PATCH_ROUNDNESS = 0.90    # circularity of its outline (1 = a circle) ...
+PATCH_LARGE = 200         # ... unless it is at least this big
+
+
+def find_patches(image, polygon=None):
+    """Repair patches in a frontlit ``image`` (a PIL image): a list of dicts with
+    ``x``, ``y``, ``radius`` (pixels), ``area``, ``brightness`` and ``roundness``,
+    largest first.  Only patches inside ``polygon`` are kept, if it is given."""
+    import cv2
+
+    arr = np.asarray(image)
+    grey = (arr.max(axis=2) if arr.ndim == 3 else arr).astype(np.float32)
+    height, width = grey.shape
+    small = cv2.resize(grey, (max(1, width // 4), max(1, height // 4)), interpolation=cv2.INTER_AREA)
+    background = cv2.medianBlur(np.clip(small, 0, 255).astype(np.uint8), 31).astype(np.float32)
+    background = cv2.resize(background, (width, height), interpolation=cv2.INTER_LINEAR)
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        ((grey - background) > PATCH_CONTRAST).astype(np.uint8), connectivity=8)
+
+    patches = []
+    for i in range(1, count):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+        w, h = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+        if not PATCH_MIN_AREA <= area <= PATCH_MAX_AREA or max(w, h) > 2 * min(w, h) or area < 0.5 * w * h:
+            continue
+        mine = labels[y0:y0 + h, x0:x0 + w] == i
+        brightness = float(grey[y0:y0 + h, x0:x0 + w][mine].mean())
+        if brightness < PATCH_BRIGHTNESS:
+            continue
+        contours, _ = cv2.findContours(mine.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        hull = cv2.convexHull(max(contours, key=cv2.contourArea))
+        perimeter = cv2.arcLength(hull, True)
+        roundness = 4 * math.pi * cv2.contourArea(hull) / max(1.0, perimeter * perimeter)
+        if roundness < PATCH_ROUNDNESS and area < PATCH_LARGE:
+            continue
+        patches.append({"x": float(centroids[i][0]) + 0.5, "y": float(centroids[i][1]) + 0.5,
+                        "radius": math.sqrt(area / math.pi), "area": area,
+                        "brightness": brightness, "roundness": roundness})
+    if polygon is not None and patches:
+        inside = inside_polygon([p["x"] for p in patches], [p["y"] for p in patches], polygon)
+        patches = [p for p, ok in zip(patches, inside) if ok]
+    patches.sort(key=lambda p: -p["area"])
+    return patches
+
 
 def flag_present_in(candidates, others, tolerance=10.0):
     """Mark each candidate with whether a spot in ``others`` (a list of ``(x, y)``

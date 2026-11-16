@@ -1,5 +1,6 @@
-from .main import run_app
+import sys
 
+from .launch import main
 
 if __name__ == "__main__":
-    run_app()
+    raise SystemExit(main(sys.argv[1:]))

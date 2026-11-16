@@ -1,20 +1,19 @@
 import hashlib
 import hmac
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Config
-from .license_ui import (
-    ask_license_file,
-    ask_license_method,
-    ask_password,
-    show_license_error,
-)
+
+# The licence file the command line uses when none was accepted before.
+LICENSE_ENV = "MSSL_FOCUS_LICENSE"
 
 
 def _fail(message):
+    from .license_ui import show_license_error
     show_license_error(message)
     raise SystemExit(1)
 
@@ -76,6 +75,7 @@ def check_license(backend, config=None):
     A licence file that was accepted before (or one sitting beside the program)
     is re-validated silently, so a licensed user is not asked on every start.
     """
+    from .license_ui import ask_license_file, ask_license_method, ask_password
     config = config if config is not None else Config()
     for candidate in _known_license_files(config):
         if candidate.is_file() and _license_problem(backend, candidate) is None:
@@ -110,4 +110,40 @@ def check_license(backend, config=None):
     )
 
 
-__all__ = ["check_license"]
+def license_problem_quietly(backend, config=None, environ=None, password=None):
+    """The licence check for the command line, which has no dialogs: ``None`` if
+    licensed, else a message saying how to become so.
+
+    A licence file accepted before (in the window), one beside the program, or
+    one named by the ``MSSL_FOCUS_LICENSE`` environment variable is accepted;
+    failing those, ``password`` (a callable, used at an interactive terminal)
+    is asked for the master password.
+    """
+    config = config if config is not None else Config()
+    environ = os.environ if environ is None else environ
+    named = environ.get(LICENSE_ENV)
+    problems = []
+    if named:
+        problem = _license_problem(backend, named)
+        if problem is None:
+            config.set("license_path", str(Path(named).resolve()))
+            return None
+        problems.append(f"{named}: {problem}")
+    for candidate in _known_license_files(config):
+        if candidate.is_file() and _license_problem(backend, candidate) is None:
+            config.set("license_path", str(candidate))
+            return None
+    if password is not None:
+        entered = password()
+        if entered:
+            digest = hashlib.sha256(entered.encode("utf-8")).hexdigest()
+            if hmac.compare_digest(digest, backend._MASTER_HASH):
+                return None
+            problems.append("Incorrect master password.")
+    return "\n".join(problems + [
+        "MSSL FOCUS needs a valid license file. Open the application once and choose your "
+        f"license.dat (it is remembered), put it beside the program, or set {LICENSE_ENV} to its path. "
+        "To request a license, contact jm2@mssl.ucl.ac.uk."])
+
+
+__all__ = ["check_license", "license_problem_quietly", "LICENSE_ENV"]

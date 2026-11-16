@@ -53,7 +53,9 @@ python mssl_focus.py export em2 --inspection thermal -o map.png      # everythin
 python mssl_focus.py export SESSION.json -o map.png                  # a single session, as before
 ```
 
-Given a folder, the photographs are chosen from its RAW files (TIFF and JPEG copies are ignored): the backlit one with the longest exposure, the latest if several share it, and the frontlit one with the exposure nearest 0.25 s, leaving out dimmer lightings, nearest in sequence to the backlit one. If the standard development turns a dark backlit frame's noise into thousands of spots, it is developed a stop or two darker, and the setting is kept with the inspection.
+The packaged program takes the same commands (`mssl_focus.exe show em2`). They need a licence as the window does: the license file chosen in the window is remembered, one beside the program is found, or `MSSL_FOCUS_LICENSE` can name it. The program is a windowed one, so a Windows terminal does not wait for it; use `start /wait /b mssl_focus.exe ...` in Command Prompt, or `Start-Process -Wait -NoNewWindow mssl_focus.exe ...` in PowerShell.
+
+Given a folder, the photographs are chosen from its RAW files (TIFF and JPEG copies are ignored, and a RAW file that cannot be read is listed and left out): the backlit one with the longest exposure, the latest if several share it, and the frontlit one with the exposure nearest 0.25 s, leaving out dimmer lightings, nearest in sequence to the backlit one. If the standard development turns a dark backlit frame's noise into thousands of spots, it is developed a stop or two darker, and the setting is kept with the inspection.
 
 Adding an inspection lines the frontlit photograph up on the backlit one, turns the filter upright by its frame, finds the outline of the membrane from the frame's opening, and places the inspection on the filter using the pinholes already known. Run any command with `-h` for its options.
 

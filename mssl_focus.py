@@ -9,23 +9,7 @@
                                                 -h for details)
 """
 
-import sys
-
-# The command-line verbs; kept here so starting the window imports nothing extra.
-COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate", "photos",
-            "replace-photos", "remove", "crosscheck", "unsure", "sure", "-h", "--help")
-
-
-def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] in COMMANDS:
-        # Imported here so the command line works where there is no display.
-        from src.cli import main as cli_main
-        return cli_main(argv)
-    from src.main import run_app
-    run_app()
-    return 0
-
+from src.launch import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

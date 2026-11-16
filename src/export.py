@@ -1,28 +1,20 @@
-"""Export a region of the view, with markers, legend and watermark, as an image."""
+"""Export a region of the view, with markers, legend and watermark, as an image.
 
-import datetime
-import math
+The drawing itself lives in ``render.py`` so that the command line (``cli.py``)
+produces exactly the same picture; this module holds the window's side of it:
+turning the current widget state into a :class:`render.Scene`, and the preview
+dialog.
+"""
+
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageDraw, ImageFont, ImageTk
+from PIL import ImageTk
 
-from . import geometry as geo
+from . import render
 from . import theme
-from .imaging import blank_frame
-from .metadata import APP_VERSION
-from .pair import BACKLIT, FRONTLIT, marker_text
+from .render import MAX_EXPORT_PIXELS, GAP, _font  # re-exported: used by callers and tests
 from .viewer import CURRENT, REFERENCE
-
-MAX_EXPORT_PIXELS = 160e6
-GAP = 4
-
-
-def _font(size):
-    try:
-        return ImageFont.load_default(size=max(6, int(size)))
-    except TypeError:  # Pillow without a scalable default font
-        return ImageFont.load_default()
 
 
 class ExportMixin:
@@ -35,143 +27,45 @@ class ExportMixin:
         self.show_export_preview(0, 0, canvas.winfo_width(), canvas.winfo_height())
 
     # ------------------------------------------------------------------ #
-    # Rendering
+    # Rendering - the window's state, handed to render.py
     # ------------------------------------------------------------------ #
+
+    def _scene(self, label_size=None, legend_size=None, line_width=None):
+        """Everything render.py needs, taken from the current widget state."""
+        return render.Scene(
+            pairs=self.pairs,
+            zoom=self.zoom,
+            pan_x=self.pan_x,
+            pan_y=self.pan_y,
+            mode=self.mode_var.get(),
+            opacity=float(self.opacity_var.get()),
+            crop_pad=max(0, int(self.crop_pad_var.get())),
+            label_size=self.annot_label_size_var.get() if label_size is None else label_size,
+            legend_size=self.canvas_legend_size_var.get() if legend_size is None else legend_size,
+            line_width=self.annot_width_var.get() if line_width is None else line_width,
+            px_per_point=self.root.winfo_fpixels("1p"),
+            row_matrix=self.row_matrix(),
+        )
 
     def _export_geometry(self, x0, y0, x1, y1, rows):
         """Output scale, padding and panel size for a canvas rectangle."""
-        pad = max(0, int(self.crop_pad_var.get()))
-        panels = len(rows) * (1 if self.mode_var.get() == "overlay" else 2)
-        world_w = max(1.0, (x1 - x0) / self.zoom)
-        world_h = max(1.0, (y1 - y0) / self.zoom)
-        # Native resolution of the current backlit image, unless that would be enormous.
-        scale = min(1.0, math.sqrt(MAX_EXPORT_PIXELS / (world_w * world_h * panels)))
-        width = max(1, int(round(world_w * scale))) + 2 * pad
-        height = max(1, int(round(world_h * scale))) + 2 * pad
-        world_x0 = (x0 - self.pan_x) / self.zoom
-        world_y0 = (y0 - self.pan_y) / self.zoom
-        view = geo.translation(pad, pad) @ geo.scaling(scale) @ geo.translation(-world_x0, -world_y0)
-        return view, scale, (width, height)
+        return render.export_geometry(self._scene(), x0, y0, x1, y1, rows)
 
     def _export_images(self, x0, y0, x1, y1, rows):
         """The image part of an export (slow); markers and text are added per preview."""
-        view, scale, size = self._export_geometry(x0, y0, x1, y1, rows)
-        overlay = self.mode_var.get() == "overlay"
-        rendered = []
-        for row in rows:
-            if overlay:
-                frames = [self._compose_pane(row, BACKLIT, size, view, True) or blank_frame(size)]
-            else:
-                frames = [self._render_frame(row, idx, size, view, True) or blank_frame(size)
-                          for idx in (BACKLIT, FRONTLIT)]
-            rendered.append((row, frames))
-        return {"view": view, "scale": scale, "size": size, "rows": rendered}
+        return render.export_images(self._scene(), x0, y0, x1, y1, rows)
 
     def _compose_export(self, images, label_size, legend_size, line_width):
-        view, scale, (width, height) = images["view"], images["scale"], images["size"]
-        rows = images["rows"]
-        # Sizes are given as on screen; convert to output pixels.
-        per_screen_px = scale / self.zoom
-        px_per_point = self.root.winfo_fpixels("1p")
-        label_font = _font(label_size * px_per_point * per_screen_px)
-        legend_font = _font(legend_size * px_per_point * per_screen_px)
-        stroke = max(1, int(round(line_width * per_screen_px)))
-        with_titles = len(rows) > 1
-        title_font = _font(max(14, height // 45))
-        title_h = int(title_font.size * 2.0) if with_titles else 0
-
-        panel_count = len(rows[0][1])
-        total_w = width * panel_count + GAP * (panel_count - 1)
-        total_h = (height + title_h) * len(rows) + GAP * (len(rows) - 1)
-        result = Image.new("RGB", (total_w, total_h), (40, 40, 40))
-        draw = ImageDraw.Draw(result)
-
-        for n, (row, frames) in enumerate(rows):
-            top = n * (height + title_h + GAP)
-            pair = self.pairs[row]
-            if with_titles:
-                name = ("Reference: " if row == REFERENCE else "Current: ") + (pair.label or "untitled")
-                draw.text((title_font.size // 2, top + title_font.size // 2), name, fill="#dddddd",
-                          font=title_font)
-            to_output = view @ self.world_matrix(row, BACKLIT)
-            marker_scale = geo.scale_of(to_output)
-            for col, frame in enumerate(frames):
-                # Markers are drawn on the panel itself so they never spill into its neighbour.
-                panel = frame.copy()
-                panel_draw = ImageDraw.Draw(panel)
-                for ann in pair.annotations:
-                    cx, cy = geo.apply(to_output, ann["img1_x"], ann["img1_y"])
-                    radius = max(2.0, ann["radius"] * marker_scale)
-                    if cx + radius < 0 or cy + radius < 0 or cx - radius > width or cy - radius > height:
-                        continue
-                    panel_draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
-                                       outline=ann["colour"], width=stroke)
-                    text = marker_text(ann)
-                    if text:
-                        panel_draw.text((cx + radius + stroke + 3, cy), text, fill=ann["colour"],
-                                        font=label_font, anchor="lm")
-                result.paste(panel, (col * (width + GAP), top + title_h))
-
-        self._draw_watermark(result)
-        legends = [(self.pairs[row].label if with_titles else None, self.pairs[row].legend())
-                   for row, _frames in rows]
-        return self._attach_legend(result, legends, legend_font)
+        return render.compose_export(self._scene(label_size, legend_size, line_width),
+                                     images, label_size, legend_size, line_width)
 
     @staticmethod
     def _draw_watermark(img):
-        size = max(10, min(img.width, img.height) // 80)
-        font = _font(size)
-        text = f"MSSL FOCUS v{APP_VERSION}  |  {datetime.date.today().isoformat()}"
-        draw = ImageDraw.Draw(img)
-        box = draw.textbbox((0, 0), text, font=font)
-        text_w, text_h = box[2] - box[0], box[3] - box[1]
-        pad = max(4, size // 3)
-        x = pad
-        y = img.height - text_h - pad * 3
-        draw.rectangle([x, y, x + text_w + pad * 2, y + text_h + pad * 2], fill="#1e1e1e", outline="#555555")
-        draw.text((x + pad - box[0], y + pad - box[1]), text, fill="#cccccc", font=font)
+        return render.draw_watermark(img)
 
     @staticmethod
     def _attach_legend(result, legends, font):
-        legends = [(title, data) for title, data in legends if data]
-        if not legends:
-            return result
-        line = int(font.size * 1.7)
-        swatch = int(font.size * 0.9)
-        pad = max(8, font.size // 2)
-        measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        rows = []  # (kind, colour, text)
-        for title, data in legends:
-            if title:
-                rows.append(("title", "#dddddd", title))
-            for colour, text in data:
-                rows.append(("entry", colour, text))
-            rows.append(("gap", None, ""))
-        rows.pop()
-        text_w = max(measure.textbbox((0, 0), text, font=font)[2] for _k, _c, text in rows)
-        box_w = pad * 2 + swatch + 6 + text_w
-        box_h = pad * 2 + sum(line // 2 if kind == "gap" else line for kind, _c, _t in rows)
-        final = Image.new("RGB", (result.width + box_w + pad * 2, max(result.height, box_h + pad * 2)),
-                          (30, 30, 30))
-        final.paste(result, (0, 0))
-        draw = ImageDraw.Draw(final)
-        x0 = result.width + pad
-        y = max(pad, (final.height - box_h) // 2)
-        draw.rectangle([x0, y, x0 + box_w, y + box_h], fill="#1e1e1e", outline="#555555")
-        y += pad
-        for kind, colour, text in rows:
-            if kind == "gap":
-                y += line // 2
-                continue
-            middle = y + line // 2
-            if kind == "title":
-                draw.text((x0 + pad, middle), text, fill=colour, font=font, anchor="lm")
-            else:
-                draw.rectangle([x0 + pad, middle - swatch // 2, x0 + pad + swatch, middle + swatch // 2],
-                               fill=colour)
-                draw.text((x0 + pad + swatch + 6, middle), text, fill=colour, font=font, anchor="lm")
-            y += line
-        return final
+        return render.attach_legend(result, legends, font)
 
     def render_export(self, x0, y0, x1, y1, include_reference=False,
                       label_size=None, legend_size=None, line_width=None):
@@ -183,6 +77,7 @@ class ExportMixin:
             self.canvas_legend_size_var.get() if legend_size is None else legend_size,
             self.annot_width_var.get() if line_width is None else line_width,
         )
+
 
     # ------------------------------------------------------------------ #
     # Preview dialog

@@ -89,6 +89,24 @@ def _linear_raw(path):
     return linear, margins
 
 
+def raw_crop_margins(path):
+    """The (left, top) margin ``_linear_raw`` crops off a RAW file, read without
+    developing it."""
+    import rawpy
+
+    with rawpy.imread(path) as raw:
+        sizes = raw.sizes
+        left = int(getattr(sizes, "crop_left_margin", 0) or 0)
+        top = int(getattr(sizes, "crop_top_margin", 0) or 0)
+        crop_w = int(getattr(sizes, "crop_width", 0) or 0)
+        crop_h = int(getattr(sizes, "crop_height", 0) or 0)
+        flip = int(getattr(sizes, "flip", 0) or 0)
+        width, height = int(sizes.width), int(sizes.height)
+    if flip == 0 and 0 < crop_w and 0 < crop_h and left + crop_w <= width and top + crop_h <= height:
+        return (left, top)
+    return (0, 0)
+
+
 def check_same_exposure(paths):
     """Averaging only makes sense for frames taken with identical settings."""
     first = read_camera_info(paths[0])

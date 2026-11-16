@@ -413,6 +413,25 @@ def set_status(history, ids, status):
     return changed, unchanged, unknown
 
 
+def set_unsure(history, ids, unsure=True):
+    """Mark pinholes by ID as unsure (shown with a '?'), or as sure again.
+    Returns ``(changed, unchanged, unknown)`` ID lists."""
+    changed, unchanged, unknown = [], [], []
+    for pid in dict.fromkeys(ids):
+        p = pinhole(history, pid)
+        if p is None:
+            unknown.append(pid)
+        elif bool(p.get("unsure")) == unsure:
+            unchanged.append(p["id"])
+        else:
+            if unsure:
+                p["unsure"] = True
+            else:
+                p.pop("unsure", None)
+            changed.append(p["id"])
+    return changed, unchanged, unknown
+
+
 def image_position(insp, p):
     """Where a pinhole is in an inspection's backlit image: ``(x, y, radius)``."""
     matrix = to_filter(insp)

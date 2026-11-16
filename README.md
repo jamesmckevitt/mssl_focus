@@ -47,6 +47,7 @@ python mssl_focus.py remove em2 thermal                              # with the 
 python mssl_focus.py detect em2 thermal                              # sharp points; --sensitivity for every spot
 python mssl_focus.py crosscheck em2                                  # faint ones, seen in two inspections or more
 python mssl_focus.py reject em2 T4 T7                                # or: accept em2 T7
+python mssl_focus.py unsure em2 T2 T3                                # shown as T2?; sure em2 T2 undoes it
 python mssl_focus.py show em2 --pinholes
 python mssl_focus.py export em2 --inspection thermal -o map.png      # everything known up to it
 python mssl_focus.py export SESSION.json -o map.png                  # a single session, as before

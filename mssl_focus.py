@@ -4,15 +4,16 @@
     python mssl_focus.py export SESSION.json    render a map without a window
     python mssl_focus.py COMMAND ...            work with a filter's inspection history
                                                 (add, align, detect, accept, reject,
-                                                show, migrate, photos, replace-photos,
-                                                remove, crosscheck; -h for details)
+                                                unsure, sure, show, migrate, photos,
+                                                replace-photos, remove, crosscheck;
+                                                -h for details)
 """
 
 import sys
 
 # The command-line verbs; kept here so starting the window imports nothing extra.
 COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate", "photos",
-            "replace-photos", "remove", "crosscheck", "-h", "--help")
+            "replace-photos", "remove", "crosscheck", "unsure", "sure", "-h", "--help")
 
 
 def main(argv=None):

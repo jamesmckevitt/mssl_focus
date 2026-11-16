@@ -30,7 +30,7 @@ from .session_data import (fill_pair_from_session, read_session, resolve_frame_p
                            session_image_paths, shift_legacy_raw_markers)
 
 COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate", "photos",
-            "replace-photos", "remove", "crosscheck")
+            "replace-photos", "remove", "crosscheck", "unsure", "sure")
 
 
 def _say(message, quiet=False):
@@ -436,6 +436,21 @@ def _set_status(args, status):
     return 0
 
 
+def _set_unsure(args, unsure):
+    path, history = _open(args.history)
+    changed, unchanged, unknown = hist.set_unsure(history, args.ids, unsure)
+    word = "unsure" if unsure else "sure"
+    if changed:
+        hist.write_history(path, history)
+        print(f"{word}: " + " ".join(changed))
+    if unchanged:
+        print(f"already {word}: " + " ".join(unchanged))
+    if unknown:
+        print("no such pinhole: " + " ".join(unknown), file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_show(args):
     _path, history = _open(args.history)
     for line in hist.summary_lines(history):
@@ -575,7 +590,8 @@ def _history_parser():
     q.add_argument("-n", "--dry-run", action="store_true", help="list them without writing")
     common(q)
 
-    for name, verb in (("accept", "accept"), ("reject", "reject")):
+    for name, verb in (("accept", "accept"), ("reject", "reject"), ("unsure", "mark as unsure ('?')"),
+                       ("sure", "mark as sure again")):
         q = sub.add_parser(name, help=f"{verb} pinholes by ID")
         q.add_argument("history")
         q.add_argument("ids", nargs="+", metavar="ID")
@@ -602,7 +618,8 @@ HANDLERS = {"add": cmd_add, "align": cmd_align, "detect": cmd_detect, "show": cm
             "migrate": cmd_migrate, "photos": cmd_photos, "replace-photos": cmd_replace_photos,
             "remove": cmd_remove, "crosscheck": cmd_crosscheck,
             "accept": lambda a: _set_status(a, hist.ACCEPTED),
-            "reject": lambda a: _set_status(a, hist.REJECTED)}
+            "reject": lambda a: _set_status(a, hist.REJECTED),
+            "unsure": lambda a: _set_unsure(a, True), "sure": lambda a: _set_unsure(a, False)}
 
 
 def usage():

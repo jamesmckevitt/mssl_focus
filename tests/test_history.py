@@ -186,6 +186,26 @@ def test_repairs_are_found_from_the_front(tmp_path):
     assert added == [] and {"R1", "R2"} <= set(summary["found_again"])
 
 
+def test_pinholes_can_be_marked_unsure_from_the_command_line(tmp_path, capsys):
+    from src.pair import ImagePair
+    from src.session_data import fill_pair_from_session
+    path = tmp_path / "em9.json"
+    history = hist.new_history("em9")
+    back, front = write_inspection(tmp_path / "incoming", PINHOLES)
+    _inspect(history, path, "incoming", back, front)
+    hist.write_history(path, history)
+    assert cli.main(["unsure", str(path), "I2", "I5", "I2", "I99"]) == 1
+    assert "no such pinhole: I99" in capsys.readouterr().err
+    again = hist.read_history(path)
+    assert [p["id"] for p in again["pinholes"] if p.get("unsure")] == ["I2", "I5"]
+    pair = ImagePair()
+    fill_pair_from_session(pair, hist.session_view(again, 0, path))
+    assert pair.legend()[0][1] == f"Incoming Pinholes  (n={len(PINHOLES)}, 2 unsure)"
+    assert {a["label"] for a in pair.annotations if a.get("unsure")} == {"I2", "I5"}
+    assert cli.main(["sure", str(path), "I5"]) == 0
+    assert [p["id"] for p in hist.read_history(path)["pinholes"] if p.get("unsure")] == ["I2"]
+
+
 def test_a_stage_checked_with_nothing_new_still_shows_in_the_legend(tmp_path):
     from src.pair import ImagePair
     from src.session_data import fill_pair_from_session

@@ -35,7 +35,7 @@ def _require_license():
                          "https://github.com/jamesmckevitt/mssl_focus/releases") from None
     from .license_flow import license_problem_quietly
     password = None
-    if sys.stdin is not None and sys.stdin.isatty():
+    if _interactive():
         import getpass
 
         def password():
@@ -46,6 +46,27 @@ def _require_license():
     problem = license_problem_quietly(backend, password=password)
     if problem:
         raise SystemExit(problem)
+
+
+def _interactive():
+    """Whether someone can type an answer.  On Windows ``isatty`` is also true
+    of the NUL device that scripts and scheduled tasks read from, where a prompt
+    would wait for ever, so the input must be a real console."""
+    if sys.stdin is None:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import msvcrt
+            mode = ctypes.c_uint32()
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+        except (OSError, ValueError, AttributeError):
+            return False
+    try:
+        return sys.stdin.isatty()
+    except (OSError, ValueError):
+        return False
 
 
 def _attach_console():

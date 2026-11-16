@@ -89,6 +89,19 @@ def test_pinholes_carry_across_inspections_and_rejected_spots_stay_rejected(tmp_
     assert hist.pinhole(again, "I2")["status"] == hist.REJECTED
 
 
+def test_a_rough_fit_on_few_pinholes_is_kept_when_the_finest_matching_finds_too_few():
+    # Five known pinholes; the photograph stretches the filter 8% across and squeezes
+    # it 8% up and down, which a turn-and-scale fit cannot follow, so four stay 8 px off.
+    known = [(-100, 0), (100, 0), (0, -100), (0, 100), (0, 0)]
+    seen = [(-108, 0), (108, 0), (0, -92), (0, 92), (0, 0)]
+    history = {"inspections": [{"id": "incoming"}, {"id": "ship"}],
+               "pinholes": [{"id": f"I{n + 1}", "first_seen": "incoming", "x": x, "y": y}
+                            for n, (x, y) in enumerate(known)]}
+    spots = [{"x": x, "y": y, "tier": "clear"} for x, y in seen]
+    _matrix, report = hist._register_on_pinholes(history, 1, geo.identity(), spots)
+    assert report["matched"] == 5 and report["rms"] == pytest.approx(7.2, abs=0.5)
+
+
 def test_a_filter_mounted_the_other_way_round_is_recognised(tmp_path):
     path = tmp_path / "em9.json"
     history = hist.new_history("em9")
@@ -497,3 +510,5 @@ def test_an_inspection_can_be_removed_with_its_new_pinholes(tmp_path):
     assert insp["id"] == "shock" and gone == ["S1"]
     assert [i["id"] for i in history["inspections"]] == ["incoming"]
     assert hist.pinhole(history, "S1") is None and hist.pinhole(history, "I1") is not None
+    # Its ID is not handed out again: S1 may already be on a map.
+    assert hist.next_id(history, "S") == "S2"

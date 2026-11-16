@@ -297,6 +297,9 @@ def remove_inspection(history, ref):
     insp = history["inspections"].pop(index)
     gone = [p["id"] for p in history["pinholes"] if p.get("first_seen") == insp["id"]]
     history["pinholes"] = [p for p in history["pinholes"] if p.get("first_seen") != insp["id"]]
+    if gone:
+        # Their IDs may be in maps and notes already, so they are never handed out again.
+        history["retired_ids"] = sorted(set(history.get("retired_ids") or []) | set(gone), key=_id_order)
     if (history.get("frame") or {}).get("reference") == insp["id"]:
         if history["pinholes"]:
             history["frame"]["reference"] = None
@@ -371,11 +374,17 @@ def pinhole(history, pid):
     return None
 
 
+def _used_ids(history):
+    """Every ID given out: the pinholes', and those of pinholes since removed."""
+    return [p["id"] for p in history["pinholes"]] + list(history.get("retired_ids") or [])
+
+
 def next_id(history, prefix):
-    """The next unused ID for a prefix.  IDs are never reused, rejected or not."""
+    """The next unused ID for a prefix.  IDs are never reused: rejected, or
+    removed with their inspection."""
     highest = 0
-    for p in history["pinholes"]:
-        match = _ID_PATTERN.match(p["id"])
+    for pid in _used_ids(history):
+        match = _ID_PATTERN.match(pid)
         if match and match.group(1) == prefix:
             highest = max(highest, int(match.group(2)))
     return f"{prefix}{highest + 1}"
@@ -506,8 +515,29 @@ def _frame_record(aperture, insp_id):
             "radius": round(aperture.radius, 1), "reference": insp_id}
 
 
+_last_search = {}     # the last search: a weak reference to its image, its outline, and the spots
+
+
 def find_spots(image, outline, pad=SEARCH_PAD):
-    """Every spot the pinhole search finds in and around ``outline`` (image pixels)."""
+    """Every spot the pinhole search finds in and around ``outline`` (image pixels).
+
+    The last search is remembered (holding its image only weakly), as aligning
+    and then detecting an inspection search the same image in the same outline;
+    each caller gets its own copies of the spots."""
+    import weakref
+    key = (tuple(tuple(round(float(v), 3) for v in p) for p in outline), pad)
+    last = _last_search.get("spots")
+    if last is not None and last[0]() is image and last[1] == key:
+        return [dict(c) for c in last[2]]
+    spots = _search(image, outline, pad)
+    try:
+        _last_search["spots"] = (weakref.ref(image), key, spots)
+    except TypeError:
+        _last_search.pop("spots", None)
+    return [dict(c) for c in spots]
+
+
+def _search(image, outline, pad):
     from .detect import find_pinholes, inside_polygon
     pts = np.asarray(outline, dtype=float).reshape(-1, 2)
     width, height = image.size
@@ -574,19 +604,18 @@ def _register_on_pinholes(history, index, matrix, spots, include_own=False):
 
     best = None
     for turn in (0.0, 180.0):
-        start = geo.about((0.0, 0.0), 1.0, turn) @ matrix
-        m = start
-        pairs = []
+        m = geo.about((0.0, 0.0), 1.0, turn) @ matrix
+        fit = None          # the last fit made on enough pairs, and those pairs
         for reach in (REGISTER_REACH, REGISTER_REACH / 2, MATCH_REACH / 2):
             pairs = matches(m, reach)
             if len(pairs) < 4:
-                break
+                break       # a finer reach that finds too few keeps the fit from the coarser one
             src = spot_xy[[j for _k, j in pairs]]
             dst = filter_xy[[k for k, _j in pairs]]
-            fitted, _rms = geo.fit_similarity(src, dst)
-            m = fitted
-        if len(pairs) >= 4 and (best is None or len(pairs) > len(best[1])):
-            best = (m, pairs, turn)
+            m, _rms = geo.fit_similarity(src, dst)
+            fit = (m, pairs)
+        if fit is not None and (best is None or len(fit[1]) > len(best[1])):
+            best = (fit[0], fit[1], turn)
     if best is None:
         return matrix, report
     m, pairs, turn = best
@@ -1008,7 +1037,8 @@ def apply_view(history, index, annotations, outline=None, alignment=None, adjust
             p = None   # the same pinhole twice: the second marker is a new pinhole
         if p is None:
             own = _ID_PATTERN.match(label)
-            fits = bool(own) and own.group(1) == cat["prefix"] and pinhole(history, label) is None
+            fits = (bool(own) and own.group(1) == cat["prefix"]
+                    and label.lower() not in {pid.lower() for pid in _used_ids(history)})
             pid = label if fits else next_id(history, cat["prefix"])
             p = {"id": pid, "category": cat["key"], "first_seen": insp["id"], "status": ACCEPTED,
                  "x": round(fx, 2), "y": round(fy, 2), "radius": round(ann["radius"] * scale, 2),

@@ -9,7 +9,12 @@
     python mssl_focus.py detect em2 thermal
     python mssl_focus.py reject em2 T4 T7
     python mssl_focus.py accept em2 T7
+    python mssl_focus.py unsure em2 T2
+    python mssl_focus.py crosscheck em2
     python mssl_focus.py show em2
+
+Started through ``mssl_focus.py`` or the packaged program, the commands need a
+licence as the window does (see ``launch.py``).
 
 A history is named by its file, or by the filter's name for ``<name>.json`` in
 the current folder.  Nothing here needs a display: the picture is drawn by
@@ -20,6 +25,7 @@ exported from the application.
 import argparse
 import os
 import sys
+from collections import OrderedDict
 from pathlib import Path
 
 from . import history as hist
@@ -29,8 +35,9 @@ from .pair import BACKLIT, FRONTLIT, ImagePair
 from .session_data import (fill_pair_from_session, read_session, resolve_frame_paths,
                            session_image_paths, shift_legacy_raw_markers)
 
-COMMANDS = ("export", "add", "align", "detect", "accept", "reject", "show", "migrate", "photos",
-            "replace-photos", "remove", "crosscheck", "unsure", "sure")
+from .launch import COMMANDS as _VERBS, HELP as _HELP
+
+COMMANDS = tuple(c for c in _VERBS if c not in _HELP)
 
 
 def _say(message, quiet=False):
@@ -42,18 +49,43 @@ def _say(message, quiet=False):
 # Loading images
 # --------------------------------------------------------------------------- #
 
+_DEVELOPED = OrderedDict()      # the last few developed images, by file and recipe
+_DEVELOPED_KEEP = 2
+
+
+def _open_developed(path, develop, dark_field):
+    """``open_image``, remembering the last couple of results: a command often
+    develops the same RAW photograph twice, to judge its noise and then to use it."""
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        stamp = None
+    develop = develop or {}
+    key = (str(path), stamp, bool(dark_field), float(develop.get("exposure") or 0.0),
+           str(develop.get("noise")), tuple(develop.get("frames") or ()), tuple(develop.get("dark") or ()))
+    if key in _DEVELOPED:
+        _DEVELOPED.move_to_end(key)
+        return _DEVELOPED[key]
+    image = open_image(path, develop=develop or None, dark_field=dark_field)
+    _DEVELOPED[key] = image
+    while len(_DEVELOPED) > _DEVELOPED_KEEP:
+        _DEVELOPED.popitem(last=False)
+    return image
+
+
 def _load_one(path, nr, develop, dark_field):
     """Load one image exactly as the viewer does."""
-    base = open_image(path, develop=develop, dark_field=dark_field)
+    base = _open_developed(path, develop, dark_field)
     shown = base
     if nr and nr.get("amount", 0) > 0:
         shown = denoise(base, nr["amount"], nr["color"], nr["edge"], nr["aggressive"])
     return base, Pyramid(shown)
 
 
-def pair_from_session(session, session_path, label=None, quiet=False):
+def pair_from_session(session, session_path, label=None, quiet=False, load=(BACKLIT, FRONTLIT)):
     """Build an ImagePair from a session record, with its images loaded.
-    ``session_path`` is the file that image paths are relative to."""
+    ``session_path`` is the file that image paths are relative to; ``load`` says
+    which of its images to load."""
     session_path = str(Path(session_path).resolve())
     session_dir = Path(session_path).parent
     pair = ImagePair()
@@ -63,6 +95,8 @@ def pair_from_session(session, session_path, label=None, quiet=False):
     pair.session_path = session_path
 
     paths, saved = session_image_paths(session, session_path)
+    paths = [p if idx in load else None for idx, p in enumerate(paths)]
+    saved = [s if idx in load else None for idx, s in enumerate(saved)]
     missing = [s for p, s in zip(paths, saved) if s and not p]
     if missing:
         raise SystemExit("Image file not found:\n  " + "\n  ".join(str(m) for m in missing))
@@ -86,11 +120,13 @@ def load_pair(session_path, quiet=False):
     return pair_from_session(session, session_path, quiet=quiet), session
 
 
-def _inspection_images(history, index, history_file, quiet=False):
-    """The backlit and frontlit images of an inspection, as the window shows them."""
+def _inspection_images(history, index, history_file, quiet=False, frontlit=True):
+    """The backlit and frontlit images of an inspection, as the window shows them
+    (the frontlit one None if not wanted)."""
     insp = history["inspections"][index]
     view = hist.session_view(history, index, history_file)
-    pair = pair_from_session(view, history_file, label=insp["id"], quiet=quiet)
+    pair = pair_from_session(view, history_file, label=insp["id"], quiet=quiet,
+                             load=(BACKLIT, FRONTLIT) if frontlit else (BACKLIT,))
     images = [pair.pyramids[i].image if pair.has_image(i) else None for i in (BACKLIT, FRONTLIT)]
     if images[BACKLIT] is None:
         raise SystemExit(f"inspection {insp['id']} has no backlit image")
@@ -116,7 +152,7 @@ def _settle_development(history, index, history_file, quiet=False):
         return
     develop = default_develop()
     for _step in range(5):
-        count = hist.crowded_spots(open_image(back, develop=develop, dark_field=True))
+        count = hist.crowded_spots(_open_developed(back, develop, dark_field=True))
         if count <= NOISY_SPOTS:
             break
         _say(f"  {count} candidate spots at {develop['exposure']:+g} stops: sensor noise; developing darker", quiet)
@@ -409,7 +445,7 @@ def cmd_crosscheck(args):
     path, history = _open(args.history)
     if len(history["inspections"]) < 2:
         raise SystemExit(f"{args.history}: cross-checking needs two inspections or more")
-    backlits = [_inspection_images(history, i, path, quiet=args.quiet)[BACKLIT]
+    backlits = [_inspection_images(history, i, path, quiet=args.quiet, frontlit=False)[BACKLIT]
                 for i in range(len(history["inspections"]))]
     added = hist.cross_check(history, backlits)
     for p in added:
@@ -422,24 +458,11 @@ def cmd_crosscheck(args):
     return 0
 
 
-def _set_status(args, status):
+def _mark(args, change, word):
+    """Change pinholes by ID with ``change(history, ids)`` (``set_status`` or
+    ``set_unsure``), and say what changed as ``word``."""
     path, history = _open(args.history)
-    changed, unchanged, unknown = hist.set_status(history, args.ids, status)
-    if changed:
-        hist.write_history(path, history)
-        print(f"{status}: " + " ".join(changed))
-    if unchanged:
-        print(f"already {status}: " + " ".join(unchanged))
-    if unknown:
-        print("no such pinhole: " + " ".join(unknown), file=sys.stderr)
-        return 1
-    return 0
-
-
-def _set_unsure(args, unsure):
-    path, history = _open(args.history)
-    changed, unchanged, unknown = hist.set_unsure(history, args.ids, unsure)
-    word = "unsure" if unsure else "sure"
+    changed, unchanged, unknown = change(history, args.ids)
     if changed:
         hist.write_history(path, history)
         print(f"{word}: " + " ".join(changed))
@@ -617,14 +640,28 @@ def _history_parser():
 HANDLERS = {"add": cmd_add, "align": cmd_align, "detect": cmd_detect, "show": cmd_show,
             "migrate": cmd_migrate, "photos": cmd_photos, "replace-photos": cmd_replace_photos,
             "remove": cmd_remove, "crosscheck": cmd_crosscheck,
-            "accept": lambda a: _set_status(a, hist.ACCEPTED),
-            "reject": lambda a: _set_status(a, hist.REJECTED),
-            "unsure": lambda a: _set_unsure(a, True), "sure": lambda a: _set_unsure(a, False)}
+            "accept": lambda a: _mark(a, lambda h, ids: hist.set_status(h, ids, hist.ACCEPTED), hist.ACCEPTED),
+            "reject": lambda a: _mark(a, lambda h, ids: hist.set_status(h, ids, hist.REJECTED), hist.REJECTED),
+            "unsure": lambda a: _mark(a, lambda h, ids: hist.set_unsure(h, ids, True), "unsure"),
+            "sure": lambda a: _mark(a, lambda h, ids: hist.set_unsure(h, ids, False), "sure")}
 
 
 def usage():
     return (__doc__ or "").strip() + "\n\nCommands: " + ", ".join(COMMANDS) + \
         "\nRun 'python mssl_focus.py COMMAND -h' for a command's options."
+
+
+def _expected_errors():
+    """Errors that mean bad input (a missing or unreadable file, a wrong name),
+    reported as a message rather than a traceback."""
+    from .autoalign import AlignmentError
+    errors = (hist.HistoryError, AlignmentError, OSError, ValueError)
+    try:
+        import rawpy
+        errors += (rawpy.LibRawError,)
+    except (ImportError, AttributeError):
+        pass
+    return errors
 
 
 def main(argv=None):
@@ -635,16 +672,15 @@ def main(argv=None):
     if argv[0] == "export":
         try:
             return export_main(argv[1:])
-        except (hist.HistoryError, OSError, ValueError) as exc:
-            raise SystemExit(f"export: {exc}") from None
+        except _expected_errors() as exc:
+            raise SystemExit(f"export: {exc or type(exc).__name__}") from None
     if argv[0] not in HANDLERS:
         raise SystemExit(f"unknown command {argv[0]!r}\n\n{usage()}")
     args = _history_parser().parse_args(argv)
-    from .autoalign import AlignmentError
     try:
         return HANDLERS[args.command](args)
-    except (hist.HistoryError, AlignmentError, OSError, ValueError) as exc:
-        raise SystemExit(f"{args.command}: {exc}") from None
+    except _expected_errors() as exc:
+        raise SystemExit(f"{args.command}: {exc or type(exc).__name__}") from None
 
 
 if __name__ == "__main__":

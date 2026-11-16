@@ -1,5 +1,7 @@
 """Choosing an inspection's photographs from a folder of RAW files."""
 
+from pathlib import Path
+
 import pytest
 
 from src import photos
@@ -33,6 +35,28 @@ def test_a_dim_frontlit_lighting_is_passed_over():
              shot("DSC00007.ARW", "frontlit", 0.25, 76), shot("DSC00008.ARW", "backlit", 10.0, 3.0)]
     _back, front = photos.choose(shots)
     assert front["path"] == "DSC00001.ARW"
+
+
+def test_an_unreadable_raw_file_is_listed_and_left_out(tmp_path, monkeypatch):
+    for name in ("DSC00001.ARW", "DSC00002.ARW", "DSC00003.ARW"):
+        (tmp_path / name).write_bytes(b"not really a raw file")
+    readings = {"DSC00001.ARW": (0.25, 150.0), "DSC00003.ARW": (10.0, 3.0)}
+
+    def camera(path):
+        return {"exposure_time": readings.get(Path(path).name, (None, None))[0]}
+
+    def brightness(path):
+        if Path(path).name not in readings:
+            import rawpy
+            raise rawpy.LibRawFileUnsupportedError(b"Unsupported file format or not RAW file")
+        return readings[Path(path).name][1]
+
+    monkeypatch.setattr(photos, "read_camera_info", camera)
+    monkeypatch.setattr(photos, "_preview_brightness", brightness)
+    back, front, shots = photos.choose_in(tmp_path)
+    assert Path(back).name == "DSC00003.ARW" and Path(front).name == "DSC00001.ARW"
+    assert [s["kind"] for s in shots] == ["frontlit", "unreadable", "backlit"]
+    assert any("DSC00002.ARW" in line and "could not be read" in line for line in photos.describe(shots, back, front))
 
 
 def test_a_folder_without_a_backlit_photograph_is_refused():

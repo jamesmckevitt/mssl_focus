@@ -59,20 +59,23 @@ def _preview_brightness(path):
 
 def survey(folder):
     """Every RAW photograph in a folder: ``[{path, exposure, brightness, sequence, kind}]``,
-    in sequence order.  ``kind`` is ``backlit`` or ``frontlit``."""
+    in sequence order.  ``kind`` is ``backlit`` or ``frontlit``, or ``unreadable``
+    (with a ``problem``) for a file that cannot be read, such as one still
+    being copied, which is then left out of the choice."""
     shots = []
     for path in sorted(Path(folder).iterdir()):
         if path.suffix.lower() not in RAW_EXTENSIONS or not path.is_file():
             continue
-        info = read_camera_info(str(path))
-        brightness = _preview_brightness(path)
-        shots.append({
-            "path": str(path),
-            "exposure": info.get("exposure_time"),
-            "brightness": round(brightness, 1),
-            "sequence": _sequence(path),
-            "kind": "backlit" if brightness < DARK_LEVEL else "frontlit",
-        })
+        shot = {"path": str(path), "exposure": None, "brightness": None, "sequence": _sequence(path)}
+        try:
+            shot["exposure"] = read_camera_info(str(path)).get("exposure_time")
+            brightness = _preview_brightness(path)
+        except Exception as exc:        # rawpy's errors, a truncated file, an unknown camera
+            shot.update(kind="unreadable", problem=str(exc) or type(exc).__name__)
+        else:
+            shot.update(brightness=round(brightness, 1),
+                        kind="backlit" if brightness < DARK_LEVEL else "frontlit")
+        shots.append(shot)
     shots.sort(key=lambda s: s["sequence"])
     return shots
 
@@ -111,7 +114,11 @@ def describe(shots, back=None, front=None):
     """Lines describing a survey, with the chosen photographs marked."""
     lines = []
     for s in shots:
+        name = Path(s["path"]).name
+        if s["kind"] == "unreadable":
+            lines.append(f"  {name:<14} could not be read, left out: {s.get('problem', '')}")
+            continue
         mark = "  <- backlit" if back and s["path"] == back else "  <- frontlit" if front and s["path"] == front else ""
         exposure = f"{s['exposure']:g} s" if s["exposure"] else "? s"
-        lines.append(f"  {Path(s['path']).name:<14} {s['kind']:<8} {exposure:>7}  brightness {s['brightness']:5.1f}{mark}")
+        lines.append(f"  {name:<14} {s['kind']:<8} {exposure:>7}  brightness {s['brightness']:5.1f}{mark}")
     return lines

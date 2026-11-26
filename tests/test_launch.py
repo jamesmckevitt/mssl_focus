@@ -65,3 +65,14 @@ def test_commands_check_the_licence_but_help_does_not(monkeypatch):
     assert launch.main(["--help"]) == 0
     assert launch.main(["export", "-h"]) == 0
     assert calls == ["licence", "show", "--help", "export"]
+
+
+def test_a_help_flag_inside_a_command_does_not_skip_the_licence(monkeypatch):
+    # After `--` a help flag is a file name, so these commands do real work.
+    calls = []
+    monkeypatch.setattr(launch, "_require_license", lambda: calls.append("licence"))
+    monkeypatch.setattr("src.cli.main", lambda argv: calls.append(argv[0]) or 0)
+    launch.main(["show", "--", "--help"])
+    launch.main(["export", "--", "-h", "-o", "map.png"])
+    launch.main(["add", "em9", "incoming", "folder", "-h"])
+    assert calls == ["licence", "show", "licence", "export", "licence", "add"]

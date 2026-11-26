@@ -15,7 +15,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in COMMANDS:
         _attach_console()
-        if argv[0] not in HELP and not any(a in HELP for a in argv[1:]):
+        if not _only_help(argv):
             _require_license()
         # Imported here so the command line works where there is no display.
         from .cli import main as cli_main
@@ -23,6 +23,14 @@ def main(argv=None):
     from .main import run_app
     run_app()
     return 0
+
+
+def _only_help(argv):
+    """Whether the command line asks only for help, which needs no licence.
+
+    That is `-h` or `--help` alone, or after a command name with nothing else. Anywhere else a
+    help flag may be a file name, for example after `--`."""
+    return argv[0] in HELP or (len(argv) == 2 and argv[1] in HELP)
 
 
 def _require_license():

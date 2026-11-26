@@ -1,9 +1,8 @@
-"""Export a region of the view, with markers, legend and watermark, as an image.
+"""Export a region of the view as an image, with markers, legend and watermark.
 
-The drawing itself lives in ``render.py`` so that the command line (``cli.py``)
-produces exactly the same picture; this module holds the window's side of it:
-turning the current widget state into a :class:`render.Scene`, and the preview
-dialog.
+The drawing is done by `render.py`, so the command line (`cli.py`) produces the
+same picture. This module builds a `render.Scene` from the widget state and shows
+the preview dialog.
 """
 
 import tkinter as tk
@@ -13,7 +12,7 @@ from PIL import ImageTk
 
 from . import render
 from . import theme
-from .render import MAX_EXPORT_PIXELS, GAP, _font  # re-exported: used by callers and tests
+from .render import MAX_EXPORT_PIXELS, GAP, _font  # re-exported for callers and tests
 from .viewer import CURRENT, REFERENCE
 
 
@@ -31,7 +30,7 @@ class ExportMixin:
     # ------------------------------------------------------------------ #
 
     def _scene(self, label_size=None, legend_size=None, line_width=None):
-        """Everything render.py needs, taken from the current widget state."""
+        """`render.Scene` built from the current widget state."""
         return render.Scene(
             pairs=self.pairs,
             zoom=self.zoom,
@@ -52,7 +51,7 @@ class ExportMixin:
         return render.export_geometry(self._scene(), x0, y0, x1, y1, rows)
 
     def _export_images(self, x0, y0, x1, y1, rows):
-        """The image part of an export (slow); markers and text are added per preview."""
+        """Image part of an export, the slow part. Markers and text are added per preview."""
         return render.export_images(self._scene(), x0, y0, x1, y1, rows)
 
     def _compose_export(self, images, label_size, legend_size, line_width):

@@ -122,7 +122,7 @@ class ImageComparer(ExportMixin, SessionMixin, DetectMixin, AnnotationMixin, Too
         self.pairs[row] = ImagePair()
 
     def _reset_state(self):
-        """Back to an empty session."""
+        """Reset to an empty session."""
         self.pairs = [ImagePair(), ImagePair()]
         self.reset_row_shift()
         self.zoom, self.pan_x, self.pan_y = 1.0, 0.0, 0.0

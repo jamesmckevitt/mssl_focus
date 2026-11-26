@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""
-Pre-build helper called by the GitHub Actions workflow.
+"""Write the files the GitHub Actions build needs for a release tag.
 
-Usage: python build_prepare.py <git-tag>   e.g.  python build_prepare.py v1.2.3
+Usage: python build_prepare.py <git-tag>, for example python build_prepare.py v1.2.3
 
 Writes:
-  _version.txt           -- plain version string (tag with leading 'v' stripped)
-  app.ico                -- application icon (multi-size ICO via Pillow)
-  app.png                -- application icon (PNG for Linux/runtime use)
-  file_version_info.txt  -- PyInstaller Windows VERSIONINFO resource
+  _version.txt           - version string, the tag without its leading `v`
+  app.ico                - application icon, multi-size ICO made with Pillow
+  app.png                - application icon as PNG, for Linux and the running app
+  file_version_info.txt  - PyInstaller Windows VERSIONINFO resource
 
-Mutates:
-  pyproject.toml         -- stamps project.version with the clean version string
+Updates:
+  pyproject.toml         - sets project.version to the version string
 """
 
 import pathlib
@@ -31,7 +30,7 @@ def main():
     print(f"Wrote _version.txt: {ver_str}")
 
     # ------------------------------------------------------------------ #
-    # app.ico  (requires Pillow, already installed by the workflow)
+    # app.ico and app.png, made with Pillow (installed by the workflow)
     # ------------------------------------------------------------------ #
     from PIL import Image, ImageDraw
 
@@ -59,7 +58,7 @@ def main():
     print("Generated app.ico and app.png")
 
     # ------------------------------------------------------------------ #
-    # file_version_info.txt  (Windows VERSIONINFO for PyInstaller)
+    # file_version_info.txt, the Windows VERSIONINFO resource for PyInstaller
     # ------------------------------------------------------------------ #
     parts = re.findall(r"\d+", ver_str) + ["0", "0", "0", "0"]
     a, b, c, dv = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
@@ -98,7 +97,7 @@ VSVersionInfo(
     print("Generated file_version_info.txt")
 
     # ------------------------------------------------------------------ #
-    # pyproject.toml  (stamp project.version with the clean version string)
+    # pyproject.toml, with project.version set to the version string
     # ------------------------------------------------------------------ #
     toml_path = pathlib.Path("pyproject.toml")
     if toml_path.exists():

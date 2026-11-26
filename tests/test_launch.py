@@ -1,4 +1,4 @@
-"""Starting the program: the command line needs a licence, checked without dialogs."""
+"""Starting the program, where the command line checks the licence without dialogs."""
 
 import hashlib
 import json

@@ -8,7 +8,7 @@ APP_EMAIL = "jm2@mssl.ucl.ac.uk"
 
 
 def _read_app_version():
-    """Read version from a bundled or workspace-local _version.txt file."""
+    """Version from a bundled or workspace-local `_version.txt` file, or `dev` if there is none."""
     if getattr(sys, "frozen", False):
         candidates = [Path(sys._MEIPASS) / "_version.txt"]
     else:

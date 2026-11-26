@@ -1,5 +1,4 @@
-"""State for one inspection: a backlit/frontlit image pair, its alignment,
-tone settings and annotations."""
+"""An inspection's backlit and frontlit images, with their alignment, tone settings and annotations."""
 
 import copy
 import re
@@ -17,7 +16,7 @@ _LABEL_PATTERN = re.compile(r"^(.*?)(\d+)$")
 
 
 def marker_text(ann):
-    """The label drawn beside a marker; a trailing '?' flags one the inspector was unsure about."""
+    """Label drawn beside a marker, with a trailing `?` if the inspector was unsure about it."""
     label = ann.get("label", "")
     return label + "?" if ann.get("unsure") else label
 
@@ -61,7 +60,7 @@ class ImagePair:
         self.label = ""
         self.session_path = None
         self.row_alignments = {}          # how this row lines up with other sessions shown as its reference
-        self.history_inspection = None    # set when opened from a filter history: the inspection's ID
+        self.history_inspection = None    # ID of the inspection, when opened from a filter history
 
     # ------------------------------------------------------------------ #
     # Images
@@ -97,7 +96,7 @@ class ImagePair:
         return build_lut(a["brightness"], a["contrast"], a["blacks"], a["whites"], pyramid.mean)
 
     # ------------------------------------------------------------------ #
-    # Geometry: image pixels -> "pair space" (the upright backlit frame)
+    # Geometry from image pixels to "pair space", the upright backlit frame
     # ------------------------------------------------------------------ #
 
     def matrix(self, idx):
@@ -107,7 +106,7 @@ class ImagePair:
             self.centre(FRONTLIT), self.scale, self.glob_rot + self.rot)
 
     def set_frontlit_matrix(self, matrix):
-        """Set offset/rotation/scale so the frontlit image is placed by ``matrix``."""
+        """Set offset, rotation and scale so that `matrix` places the frontlit image."""
         scale, total_rot, tx, ty = geo.decompose_about(matrix, self.centre(FRONTLIT))
         self.scale = float(scale)
         self.rot = float(geo.wrap_angle(total_rot - self.glob_rot))
@@ -115,7 +114,7 @@ class ImagePair:
         self.off_y = float(ty)
 
     def set_global_rotation(self, deg):
-        """Turn both images together about the backlit centre, keeping them registered."""
+        """Turn both images together to `deg` degrees about the backlit centre, keeping them registered."""
         delta = deg - self.glob_rot
         if delta == 0.0:
             return
@@ -132,9 +131,10 @@ class ImagePair:
     # ------------------------------------------------------------------ #
 
     def legend(self):
-        """One ``(colour, text)`` entry per colour in use, with marker counts.  The
-        colours in ``legend_colours`` come first, in that order, and are listed
-        even when nothing was found (``n=0``): a stage that was checked."""
+        """One `(colour, text)` legend entry per colour in use, with marker counts.
+
+        The colours in `legend_colours` come first, in that order. They are listed
+        even with no markers (`n=0`), to show a stage that was checked."""
         counts, unsure = {colour: 0 for colour in self.legend_colours}, {}
         for ann in self.annotations:
             counts[ann["colour"]] = counts.get(ann["colour"], 0) + 1
@@ -148,7 +148,7 @@ class ImagePair:
         return entries
 
     def prefix_for(self, colour):
-        """Label prefix for a colour: the stored one, else inferred from existing labels."""
+        """Label prefix for a colour, the stored one or else one inferred from existing labels."""
         if colour in self.label_prefixes:
             return self.label_prefixes[colour]
         for ann in reversed(self.annotations):

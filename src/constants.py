@@ -1,5 +1,4 @@
-# Stroke width (pixels) for annotation circles drawn on the canvas and in exports.
-# Change this one value to adjust thickness everywhere.
+# Stroke width in pixels of every annotation circle, on the canvas and in exports.
 ANNOTATION_WIDTH = 2
 
 BACKLIT_IMAGE_LABEL = "Backlit Image"

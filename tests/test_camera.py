@@ -14,7 +14,7 @@ from src.imaging import open_image
 
 
 def save_with_exif(path, f_number, exposure, iso=2000, model="ILCE-6400"):
-    """A small photo carrying the exposure settings a camera would record."""
+    """Save a small photo with the exposure settings a camera records and return its path."""
     exif = Image.Exif()
     exif[0x0110] = model
     details = exif.get_ifd(0x8769)
@@ -63,7 +63,7 @@ def test_differences_between_two_photos_are_spelled_out():
                                              "exposure time 1/5 s then, 1/4 s now"]
     assert camera_differences(then, dict(then)) == []
     assert camera_differences(then, {}) == []
-    # f/9 at 1/4 s against f/8 at 1/5 s: almost exactly the same amount of light.
+    # f/9 at 1/4 s and f/8 at 1/5 s give almost exactly the same amount of light.
     assert exposure_stops(then, now) == pytest.approx(-0.018, abs=0.01)
     assert exposure_stops(then, {"f_number": 8.0, "exposure_time": 0.4, "iso": 2000}) == pytest.approx(1.0)
     assert exposure_stops(then, {}) is None

@@ -1,5 +1,7 @@
-"""The automatic pinhole search: its search area (the filter outline), the live
-preview of what it finds, the one-by-one review, and centring markers on spots."""
+"""Pinhole search in the interface.
+
+Covers the search area (the filter outline), the live preview of the spots found, the one-by-one
+review and centring markers on spots."""
 
 import math
 import tkinter as tk
@@ -26,14 +28,14 @@ REVIEW_ZOOM = 2.0
 SEARCH_PAD = 80        # pixels searched beyond the outline, so adjusting it needs no new search
 SPOT_LIMIT = 12000
 DRAW_LIMIT = 4000
-CENTRE_REACH = 12.0    # a marker is centred on a spot inside its circle, or at least this close
+CENTRE_REACH = 12.0    # pixels; a marker moves to a spot inside its circle or within this distance
 QUICK_AREA = 1_500_000  # pixels; smaller searches run at once, without a progress window
 ROUNDED_POINTS = len(geo.rounded_rectangle(0, 0, 100, 100, 10))
 TIER_COLOURS = {"clear": "#6ee67a", "likely": "#ffe14d", "faint": "#ff9d5c"}
 
 
 def _padded_box(points, size, pad):
-    """Bounding box of ``points`` grown by ``pad`` and clipped to an image of ``size``."""
+    """Bounding box of `points` grown by `pad` pixels and clipped to an image of `size`."""
     points = np.asarray(points, dtype=float).reshape(-1, 2)
     width, height = size
     return (int(max(0, math.floor(points[:, 0].min()) - pad)), int(max(0, math.floor(points[:, 1].min()) - pad)),
@@ -41,7 +43,7 @@ def _padded_box(points, size, pad):
 
 
 def _spots_in(image, box):
-    """Every spot the search finds in a region of an image, in that image's pixel coordinates."""
+    """Spots found in region `box` of an image, in that image's pixel coordinates."""
     left, top, right, bottom = box
     if right - left < 8 or bottom - top < 8:
         return []
@@ -58,8 +60,10 @@ class DetectMixin:
     # ------------------------------------------------------------------ #
 
     def effective_outline(self):
-        """The filter outline in current-row backlit pixels: the row's own, or
-        failing that the reference row's, carried across by the row alignment."""
+        """Filter outline in current-row backlit pixels.
+
+        The current row's own outline or, failing that, the reference row's mapped across by the row
+        alignment. Empty if neither is available."""
         current, reference = self.pairs
         if len(current.outline) >= 3:
             return [tuple(p) for p in current.outline]
@@ -97,7 +101,7 @@ class DetectMixin:
         self._outline_built = (rect, self._outline_numbers())
 
     def _outline_drawing(self):
-        """Whether a drag in the Find pinholes tool draws the search area (rather than pans)."""
+        """Whether a drag in the Find pinholes tool draws the search area rather than panning."""
         return self._outline_redraw or self._outline_rect is None
 
     def redraw_outline(self):
@@ -106,7 +110,7 @@ class DetectMixin:
         self._refresh_hint()
 
     def _outline_rubber(self, x0, y0, x1, y1):
-        """Canvas points of the rounded shape a drag between two corners would give."""
+        """Canvas points of the rounded search area for a drag between two corners."""
         numbers = self._outline_numbers()
         radius = (numbers[0] if numbers else 0.0) * self.zoom
         return geo.rounded_rectangle(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1), radius)
@@ -175,11 +179,11 @@ class DetectMixin:
         self._candidate_index = 0
 
     def _to_reference(self):
-        """Current backlit pixels -> reference backlit pixels."""
+        """Matrix from current backlit pixels to reference backlit pixels."""
         return geo.invert(self.world_matrix(REFERENCE, BACKLIT)) @ self.world_matrix(CURRENT, BACKLIT)
 
     def _detection_covers(self, outline):
-        """Whether the last search still holds for the images shown and takes in ``outline``."""
+        """Whether the last search is still valid for the images shown and covers `outline`."""
         detection = self._detection
         current, reference = self.pairs
         if detection is None or len(outline) < 3 or not current.has_image(BACKLIT):
@@ -254,9 +258,9 @@ class DetectMixin:
             "Finding pinholes", [("Searching the backlit image for small bright spots...", work)], finished)
 
     def _pending(self):
-        """Spots inside the search area with no marker that have not been rejected, best first.
+        """Unmarked, unrejected spots inside the search area, best first.
 
-        Worked out again only when the search area, the markers or the alignment change.
+        Recomputed only when the search area, the markers, the rejections or the alignment change.
         """
         detection = self._detection
         current = self.pairs[CURRENT]
@@ -290,7 +294,7 @@ class DetectMixin:
         earlier = detection["earlier"]
         flag_present_in(fresh, [tuple(p) for p in geo.apply_many(from_reference, earlier)]
                         if with_reference and earlier else [])
-        # Surest first; with a reference row, spots absent from the earlier image before the rest.
+        # Surest first, with spots absent from the earlier image (given a reference row) ahead of the rest.
         fresh.sort(key=lambda c: (c["in_reference"], -c["score"]))
         self._candidates = fresh
         self._candidate_summary = {
@@ -309,8 +313,7 @@ class DetectMixin:
             return float(DEFAULT_SENSITIVITY)
 
     def _review_candidates(self):
-        """The spots on offer: those awaiting a decision that pass the Sensitivity
-        setting and the 'only new' choice."""
+        """Spots awaiting a decision that pass the Sensitivity setting and the 'only new' box."""
         floor = minimum_score(self._sensitivity())
         pending = [c for c in self._pending() if c["score"] >= floor]
         if self.detect_new_only_var.get() and self._candidate_summary.get("with_reference"):
@@ -318,7 +321,7 @@ class DetectMixin:
         return pending
 
     def _on_detect_filter_changed(self, _value=None):
-        """The Sensitivity slider or the 'only new' box changed."""
+        """Update the spots on offer after a change to the Sensitivity slider or the 'only new' box."""
         self.detect_sensitivity_var.set(round(self._sensitivity()))
         self._candidate_index = 0
         if self.tool_var.get() == "review":
@@ -443,7 +446,7 @@ class DetectMixin:
         return True
 
     def _finish_review(self):
-        """Leave the one-by-one review, back to the overview of what was found."""
+        """Leave the one-by-one review and return to the overview of the spots found."""
         self._candidate_index = 0
         if self.tool_var.get() == "review":
             self.set_tool("detect")
@@ -478,10 +481,10 @@ class DetectMixin:
     def centre_markers(self, indices=None):
         """Move markers onto the bright spots they mark.
 
-        With no ``indices``, every marker of the current row, using the spots that
-        pass the Sensitivity setting, and allowing for the markers all being off in
-        the same way (see ``realign_markers``).  Otherwise just the markers listed,
-        each to the best spot near it.  A marker with no spot is left alone.
+        With no `indices`, every marker of the current row moves, using only spots that pass the
+        Sensitivity setting and allowing for all markers being offset the same way (see
+        `realign_markers`). Otherwise only the markers listed move, each to the best spot near it. A
+        marker with no spot is left alone.
         """
         pair = self.pairs[CURRENT]
         if not pair.has_image(BACKLIT) or not pair.annotations:

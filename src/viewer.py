@@ -25,7 +25,7 @@ MAX_ZOOM = 100.0
 
 
 class Pane:
-    """One image canvas: a (row, image) slot in the grid."""
+    """One image canvas, a `(row, image)` slot in the grid."""
 
     def __init__(self, row, idx, canvas):
         self.row = row
@@ -63,7 +63,7 @@ class ViewerMixin:
         return geo.translation(self.pan_x, self.pan_y) @ geo.scaling(self.zoom)
 
     def row_matrix(self):
-        """Reference-row pair space -> current-row pair space (the shared world)."""
+        """Matrix from reference-row pair space to current-row pair space, the shared world."""
         centre = self.pairs[REFERENCE].centre(BACKLIT)
         return geo.translation(self.row_shift["x"], self.row_shift["y"]) @ geo.about(
             centre, self.row_shift["scale"], self.row_shift["rot"])
@@ -81,11 +81,11 @@ class ViewerMixin:
         return self.row_matrix() if row == REFERENCE else geo.identity()
 
     def world_matrix(self, row, idx):
-        """Image pixels -> world."""
+        """Matrix from image pixels to the world."""
         return self.pair_to_world(row) @ self.pairs[row].matrix(idx)
 
     def canvas_matrix(self, row, idx):
-        """Image pixels -> canvas pixels (the same for every canvas: views are linked)."""
+        """Matrix from image pixels to canvas pixels, the same for every canvas as views are linked."""
         return self.view_matrix() @ self.world_matrix(row, idx)
 
     def canvas_to_image(self, row, idx, x, y):
@@ -182,7 +182,7 @@ class ViewerMixin:
         return pyramid.render(matrix, size, quality=quality, lut=pair.lut(idx))
 
     def _compose_pane(self, row, idx, size, view, quality):
-        """The picture for one pane: a single image, or the blend in overlay mode."""
+        """Picture for one pane, a single image or the blend in overlay mode."""
         if self.mode_var.get() != "overlay":
             return self._render_frame(row, idx, size, view, quality)
         back = self._render_frame(row, BACKLIT, size, view, quality)
@@ -295,10 +295,10 @@ class ViewerMixin:
     # ------------------------------------------------------------------ #
 
     def _run_in_background(self, title, steps, on_done):
-        """Run ``steps`` -- a list of ``(description, callable)`` -- off the UI thread.
+        """Run `steps`, a list of `(description, callable)`, off the UI thread.
 
-        ``on_done(results)`` is called on the UI thread with one entry per step:
-        the callable's return value, or the exception it raised.
+        `on_done(results)` is called on the UI thread with one entry per step, the
+        callable's return value or the exception it raised.
         """
         if not steps:
             on_done([])
@@ -328,9 +328,9 @@ class ViewerMixin:
         except tk.TclError:
             pass
 
-        # Tk objects must only ever be finalised on the UI thread.  A garbage
-        # collection that happened to run inside the worker would try to do so
-        # there and stall, so collect now and hold collection off until done.
+        # Tk objects must only be finalised on the UI thread. A garbage collection
+        # run inside the worker would finalise them there and stall, so collect now
+        # and hold collection off until done.
         gc.collect()
         gc.disable()
 
@@ -372,11 +372,11 @@ class ViewerMixin:
         self.root.after(40, poll)
 
     def _load_images(self, jobs, on_done, title="Loading images"):
-        """Load ``jobs`` -- a list of ``((row, idx), path, nr_settings, raw_develop_settings)``,
-        either setting may be ``None`` -- in the background.
+        """Load `jobs` in the background.
 
-        ``on_done(loaded, errors)`` receives ``{key: (path, base_image, pyramid)}``
-        and ``{key: message}``.
+        `jobs` is a list of `((row, idx), path, nr_settings, raw_develop_settings)`,
+        where either setting may be `None`. `on_done(loaded, errors)` receives
+        `{key: (path, base_image, pyramid)}` and `{key: message}`.
         """
         steps = []
         for (_row, idx), path, nr, develop in jobs:
@@ -425,7 +425,7 @@ class ViewerMixin:
             self.load_image_path(paths[0], idx, row, frames=paths[1:])
 
     def load_image_path(self, path, idx, row=CURRENT, frames=()):
-        """Load an image; ``frames`` are further exposures of the same scene to average with it."""
+        """Load an image. `frames` are further exposures of the same scene to average with it."""
         was_empty = not any(pair.has_any_image() for pair in self.pairs)
         develop = dict(self.pairs[row].develop[idx], frames=list(frames), dark=[])
 
@@ -456,7 +456,7 @@ class ViewerMixin:
         self._load_images([((row, idx), path, None, develop)], finished)
 
     def choose_dark_frames(self, idx, row=CURRENT):
-        """Pick frame(s) taken with the light off; their hot pixels and stray light are removed."""
+        """Choose dark frames, taken with the light off, whose hot pixels and stray light are removed."""
         pair = self.pairs[row]
         if not pair.has_image(idx):
             self.set_status("Load the image first, then choose its dark frame.")
@@ -507,8 +507,8 @@ class ViewerMixin:
     def swap_rows(self):
         """Exchange the current and reference rows, for when they were loaded the wrong way round.
 
-        Each row keeps its own images, alignment, tone settings and markers, and the
-        alignment between the rows is kept (it is simply reversed).
+        Each row keeps its own images, alignment, tone settings and markers. The
+        alignment between the rows is kept, reversed.
         """
         if not self.pairs[REFERENCE].has_any_image():
             messagebox.showinfo("Swap rows", "There is no reference row to swap with.  Load one first.",
@@ -521,8 +521,8 @@ class ViewerMixin:
         self.set_row_matrix(geo.invert(reference_to_current))
         self.show_reference_var.set(True)
 
-        # The session is now about the other inspection, so it saves to that one's file
-        # (or asks for a name if it never had one).  Undo history refers to the old order.
+        # After the swap the session is about the other inspection, so it saves to that one's
+        # file, or asks for a name if there is none. Undo history refers to the old order.
         self.session_path = self.pairs[CURRENT].session_path
         self._undo_stack.clear()
         self._redo_stack.clear()
@@ -623,7 +623,7 @@ class ViewerMixin:
         self.zoom_readout_var.set(f"{self.zoom * 100:.0f}%" if self.zoom < 10 else f"{self.zoom:.0f}x")
 
     def level_angle(self, x0, y0, x1, y1):
-        """Clockwise correction (deg) that makes the dragged line vertical."""
+        """Clockwise correction in degrees that makes the dragged line vertical."""
         dx, dy = x1 - x0, y1 - y0
         if dy < 0:
             dx, dy = -dx, -dy

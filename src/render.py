@@ -1,11 +1,9 @@
-"""Render an export image: panels, markers, legend and watermark.
+"""Render an export image with its panels, markers, legend and watermark.
 
-This is the drawing half of an export, with no user-interface dependency, so the
-same code produces the picture whether it was asked for from the window (see
-``export.py``) or from the command line (see ``cli.py``).
-
-Everything the drawing needs is gathered in a :class:`Scene`; the Tk application
-builds one from its widgets, the command line builds one from a session file.
+The module has no user-interface dependency, so the window (`export.py`) and the
+command line (`cli.py`) draw the same picture. Everything the drawing needs is
+gathered in a `Scene`, which the window builds from its widgets and the command
+line from a session file.
 """
 
 import datetime
@@ -23,8 +21,8 @@ from .pair import BACKLIT, FRONTLIT, marker_text
 MAX_EXPORT_PIXELS = 160e6
 GAP = 4
 
-# Row indices, matching viewer.py.  Defined here so this module stays free of
-# anything that imports tkinter.
+# Row indices, as in `viewer.py`, defined here so this module imports nothing that
+# uses tkinter.
 CURRENT, REFERENCE = 0, 1
 
 
@@ -62,7 +60,7 @@ class Scene:
     def world_matrix(self, row, idx):
         return self.pair_to_world(row) @ self.pairs[row].matrix(idx)
 
-    # -- the two helpers the viewer also has, in their pure form --------- #
+    # -- two helpers the viewer also has, without its widgets ------------ #
 
     def render_frame(self, row, idx, size, view, quality=True):
         pair = self.pairs[row]
@@ -82,28 +80,29 @@ class Scene:
         return back if back is not None else front
 
 
-# Labels keep this much clear space around them, as a fraction of text height,
-# so that separated labels have a visible gap rather than merely not touching.
+# Clear space kept around each label, as a fraction of text height, so that
+# separate labels show a visible gap rather than just not touching.
 LABEL_GAP = 0.30
 LABEL_RINGS = 16          # how far out a crowded label may go, in steps of about a text height
 LABEL_DIRECTIONS = 16     # directions tried at each step
 HALO = "#000000"          # the dark rim drawn round markers and labels
 HALO_WIDTH = 0.6          # its width either side of a circle's line, as a fraction of the line's width
 SHELF = 0.14             # the line under a moved label, below the text, as a fraction of text height
-# Circles never run over another marker's pinhole.  A pinhole's spot is taken
-# to fill this fraction of its marker's radius; in a crowd a circle shrinks to
-# keep clear of its neighbours' spots (but not onto its own), and where that is
-# not enough its line is broken where it would cross one.
+# A pinhole's spot is taken to fill this fraction of its marker's radius, and no
+# circle runs over another marker's spot. In a crowd a circle shrinks to keep
+# clear of its neighbours' spots, but not onto its own. Where that is not enough
+# its line is broken where it would cross one.
 RING_SPOT = 0.25
 
 
 def ring_layout(markers, stroke, halo):
     """How to draw each marker's circle so that none covers another's pinhole.
 
-    ``markers`` are ``(cx, cy, radius)`` in output pixels, ``radius`` the circle's
-    outer edge as normally drawn.  Returns, for each, ``(r, gaps)``: the radius of
-    the circle's centre line, and the arcs left out, as ``(start, end)`` angles in
-    degrees (clockwise from 3 o'clock, as on screen); none if it is drawn whole.
+    `markers` are `(cx, cy, radius)` in output pixels, with `radius` the circle's
+    outer edge as normally drawn. Returns `(r, gaps)` for each marker. `r` is the
+    radius of the circle's centre line. `gaps` lists the arcs left out as
+    `(start, end)` angles in degrees, clockwise from 3 o'clock as on screen, and is
+    empty if the circle is drawn whole.
     """
     band = stroke / 2.0 + halo          # the line and its dark rim, either side of the centre line
     points = np.asarray([(cx, cy) for cx, cy, _r in markers], dtype=float).reshape(-1, 2)
@@ -122,7 +121,7 @@ def ring_layout(markers, stroke, halo):
             reach = band + spots[j]
             cos = (r * r + dist[j] ** 2 - reach * reach) / (2.0 * r * dist[j])
             if cos <= -1.0:
-                continue                # on top of this one: nothing a gap could show
+                continue                # on top of this one, so a gap would show nothing
             half = math.degrees(math.acos(min(1.0, cos)))
             towards = math.degrees(math.atan2(dy[j], dx[j]))
             gaps.append((towards - half, towards + half))
@@ -131,7 +130,7 @@ def ring_layout(markers, stroke, halo):
 
 
 def ring_arcs(gaps):
-    """The arcs to draw, ``(start, end)`` in degrees, given the ``gaps`` to leave."""
+    """Arcs to draw, as `(start, end)` in degrees, leaving out `gaps`."""
     if not gaps:
         return [(0.0, 360.0)]
     spans = sorted(((a % 360.0), (a % 360.0) + (b - a)) for a, b in gaps)
@@ -150,14 +149,14 @@ def ring_arcs(gaps):
     turns = [360.0 * math.floor(a / 360.0) for a, _b in arcs]
     return [(a - t, b - t) for (a, b), t in zip(arcs, turns) if b > a]
 
-# What a placement costs if it breaks a rule, worst first.  A spot that breaks
-# none is always taken in preference to any that breaks one.
+# Cost of a label placement for each rule it breaks, worst first. A place that
+# breaks no rule is always taken before any that breaks one.
 _OUTSIDE, _ON_LABEL, _ON_MARKER, _LEADER_ON_LABEL, _LEADER_ON_MARKER, _LEADERS_CROSS = (
     1e9, 1e8, 1e7, 1e6, 1e5, 1e4)
 
 
 def _boxes_hit(boxes, box):
-    """Which of ``boxes`` (n x 4: x0, y0, x1, y1) overlap ``box``."""
+    """Which of `boxes` (n x 4, rows `x0, y0, x1, y1`) overlap `box`."""
     if not len(boxes):
         return np.zeros(0, dtype=bool)
     return ((boxes[:, 0] < box[2]) & (boxes[:, 2] > box[0])
@@ -165,7 +164,7 @@ def _boxes_hit(boxes, box):
 
 
 def _circles_hit_box(circles, box):
-    """Which circles (n x 3: cx, cy, r) a box overlaps."""
+    """Which of `circles` (n x 3, rows `cx, cy, r`) overlap `box`."""
     if not len(circles):
         return np.zeros(0, dtype=bool)
     nx = np.clip(circles[:, 0], box[0], box[2])
@@ -180,7 +179,7 @@ def _segment_points(p, q, count=16):
 
 
 def _points_in_boxes(points, boxes):
-    """Which boxes any of ``points`` falls inside."""
+    """Which of `boxes` any of `points` falls inside."""
     if not len(boxes):
         return np.zeros(0, dtype=bool)
     xs, ys = points[:, 0][:, None], points[:, 1][:, None]
@@ -189,7 +188,7 @@ def _points_in_boxes(points, boxes):
 
 
 def _segment_hits_circles(p, q, circles):
-    """Which circles the segment ``p``-``q`` passes through."""
+    """Which of `circles` the segment from `p` to `q` passes through."""
     if not len(circles):
         return np.zeros(0, dtype=bool)
     p, q = np.asarray(p, dtype=float), np.asarray(q, dtype=float)
@@ -201,7 +200,7 @@ def _segment_hits_circles(p, q, circles):
 
 
 def _segments_cross(p, q, segments):
-    """Which of ``segments`` (n x 4) the segment ``p``-``q`` properly crosses."""
+    """Which of `segments` (n x 4) the segment from `p` to `q` properly crosses."""
     if not len(segments):
         return np.zeros(0, dtype=bool)
     a, b = segments[:, :2], segments[:, 2:]
@@ -215,8 +214,9 @@ def _segments_cross(p, q, segments):
 
 
 def _candidates(cx, cy, radius, w, h, pad):
-    """Places a label might go, nearest first: ``(cost, x, centre_y, ring)``.
-    Ring 0 is beside the marker (no leader); further rings need one."""
+    """Places a label might go, as `(cost, x, centre_y, ring)`, nearest first.
+
+    Ring 0 is beside the marker and needs no leader. Further rings need one."""
     out = [(0.0, cx + radius + pad, cy, 0), (1.0, cx - radius - pad - w, cy, 0)]
     step = 0.9 * h
     for ring in range(1, LABEL_RINGS + 1):
@@ -224,10 +224,10 @@ def _candidates(cx, cy, radius, w, h, pad):
         for k in range(LABEL_DIRECTIONS):
             angle = 2.0 * math.pi * k / LABEL_DIRECTIONS
             ux, uy = math.cos(angle), math.sin(angle)
-            if abs(ux) > 0.3:          # beside: the near end of the text faces the marker
+            if abs(ux) > 0.3:          # beside, with the near end of the text facing the marker
                 x = cx + ux * reach if ux > 0 else cx + ux * reach - w
                 y = cy + uy * reach
-            else:                      # above or below: centred over the direction
+            else:                      # above or below, centred on the direction
                 x = cx + ux * reach - w / 2.0
                 y = cy + uy * reach + (h / 2.0 if uy > 0 else -h / 2.0)
             # Prefer near, then to the side (as an uncrowded label sits), then right.
@@ -238,8 +238,10 @@ def _candidates(cx, cy, radius, w, h, pad):
 
 
 def _leader(cx, cy, radius, stroke, x, y, w, h):
-    """The leader of a moved label: from the rim of its marker to the near end of
-    the shelf under the text."""
+    """Leader line of a moved label.
+
+    It runs from the rim of the marker to the near end of the shelf under the text.
+    Returns its two ends and whether the label is left of the marker."""
     left_side = x + w / 2.0 < cx
     near = (x + w if left_side else x, y + h / 2.0 + SHELF * h)
     dx, dy = near[0] - cx, near[1] - cy
@@ -250,17 +252,17 @@ def _leader(cx, cy, radius, stroke, x, y, w, h):
 def label_layout(items, font, measure, width, height, stroke):
     """Choose where each marker label goes, so that labels stay readable.
 
-    ``items`` is a sequence of ``(cx, cy, radius, text)`` in panel pixels.
-    Returns one dict per item: ``x`` (left of the text), ``y`` (its middle),
-    ``w``, ``h``, ``left`` (the text is left of its marker) and ``leader``
-    (it was moved away from its marker and needs a line back to it).
+    `items` is a sequence of `(cx, cy, radius, text)` in panel pixels. Returns one
+    dict per item with `x` (left of the text), `y` (its middle), `w`, `h`, `left`
+    (the text is left of its marker) and `leader` (the label was moved away from its
+    marker and needs a line back to it).
 
-    A label goes beside its marker if that is clear.  Otherwise it is moved out,
-    step by step and in all directions, to the nearest place where it overlaps
-    no other label and no marker, and where its leader line crosses no label,
-    no marker and no other leader.  Crowded markers are placed first, while
-    there is most room near them.  Only if nowhere in reach is clear is the
-    least bad place taken.  An uncrowded map keeps every label beside its marker.
+    A label goes beside its marker if that is clear. Otherwise it is moved out, step
+    by step and in all directions, to the nearest place where it overlaps no other
+    label and no marker, and where its leader line crosses no label, no marker and
+    no other leader. Crowded markers are placed first, while there is most room near
+    them. If no place in reach is clear, the least bad one is taken. An uncrowded map
+    keeps every label beside its marker.
     """
     n = len(items)
     if not n:
@@ -274,7 +276,7 @@ def label_layout(items, font, measure, width, height, stroke):
     gap = LABEL_GAP * text_h
     circles = np.array([(cx, cy, r + stroke / 2.0 + gap / 2.0) for cx, cy, r, _t in items], dtype=float)
 
-    # Most crowded first: they have the fewest good places.
+    # Most crowded first, as they have the fewest good places.
     centres = circles[:, :2]
     crowd = (np.hypot(centres[:, None, 0] - centres[None, :, 0],
                       centres[:, None, 1] - centres[None, :, 1]) < 6.0 * text_h).sum(axis=1)
@@ -322,7 +324,7 @@ def export_geometry(scene, x0, y0, x1, y1, rows):
     panels = len(rows) * (1 if scene.mode == "overlay" else 2)
     world_w = max(1.0, (x1 - x0) / scene.zoom)
     world_h = max(1.0, (y1 - y0) / scene.zoom)
-    # Native resolution of the current backlit image, unless that would be enormous.
+    # Native resolution of the current backlit image, unless the panels would pass MAX_EXPORT_PIXELS.
     scale = min(1.0, math.sqrt(MAX_EXPORT_PIXELS / (world_w * world_h * panels)))
     width = max(1, int(round(world_w * scale))) + 2 * pad
     height = max(1, int(round(world_h * scale))) + 2 * pad
@@ -333,7 +335,7 @@ def export_geometry(scene, x0, y0, x1, y1, rows):
 
 
 def export_images(scene, x0, y0, x1, y1, rows):
-    """The image part of an export (slow); markers and text are added per preview."""
+    """Image part of an export, the slow part. Markers and text are added per preview."""
     view, scale, size = export_geometry(scene, x0, y0, x1, y1, rows)
     overlay = scene.mode == "overlay"
     rendered = []
@@ -356,7 +358,7 @@ def compose_export(scene, images, label_size, legend_size, line_width):
     label_font = _font(label_size * px_per_point * per_screen_px)
     legend_font = _font(legend_size * px_per_point * per_screen_px)
     stroke = max(1, int(round(line_width * per_screen_px)))
-    # Much finer than the lettering, so it guides the eye without competing.
+    # Leader lines are much finer than the lettering, so they guide the eye without competing.
     leader_width = max(1, int(round(label_font.size * 0.035)))
     with_titles = len(rows) > 1
     title_font = _font(max(14, height // 45))
@@ -377,8 +379,8 @@ def compose_export(scene, images, label_size, legend_size, line_width):
                       font=title_font)
         to_output = view @ scene.world_matrix(row, BACKLIT)
         marker_scale = geo.scale_of(to_output)
-        # Where every marker and its label go; the same in each panel, so work it
-        # out once and keep crowded labels legible by moving them apart.
+        # Markers and labels go in the same places in each panel, so place them once,
+        # moving crowded labels apart to keep them legible.
         visible = []
         for ann in pair.annotations:
             cx, cy = geo.apply(to_output, ann["img1_x"], ann["img1_y"])
@@ -417,10 +419,9 @@ def compose_export(scene, images, label_size, legend_size, line_width):
                 place = next(places)
                 x, y = place["x"], place["y"]
                 if place["leader"]:
-                    # A moved label is joined to its marker by a thin line that
-                    # runs from the rim of the circle to a shelf under the text,
-                    # so it is unambiguous which spot the label belongs to and
-                    # the line never crosses the writing.
+                    # Join a moved label to its marker by a thin line from the rim
+                    # of the circle to a shelf under the text, so it is clear which
+                    # spot the label belongs to and the line never crosses the writing.
                     shelf_y = y + place["h"] / 2 + max(1.0, place["h"] * SHELF)
                     near_x = x + place["w"] if place["left"] else x
                     far_x = x if place["left"] else x + place["w"]
@@ -497,7 +498,7 @@ def attach_legend(result, legends, font):
 
 
 def render_rect(scene, x0, y0, x1, y1, rows=None):
-    """Draw the canvas rectangle ``(x0, y0, x1, y1)`` for the given rows."""
+    """Draw the canvas rectangle `(x0, y0, x1, y1)` for `rows`, by default the current row only."""
     rows = [CURRENT] if rows is None else rows
     images = export_images(scene, x0, y0, x1, y1, rows)
     return compose_export(scene, images, scene.label_size, scene.legend_size, scene.line_width)

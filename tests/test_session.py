@@ -13,7 +13,7 @@ from src.session import (
 
 
 def v1_session(image_dir):
-    """A session exactly as v1.0.4 wrote it: absolute paths and blank compare_* defaults."""
+    """Session exactly as v1.0.4 wrote it, with absolute paths and blank `compare_*` defaults."""
     return {
         "version": 1,
         "image_paths": [f"{image_dir}/back.TIF", f"{image_dir}/front.TIF"],
@@ -46,8 +46,9 @@ def v1_session(image_dir):
 
 
 def test_images_are_found_beside_the_session_after_a_folder_rename(tmp_path):
-    """The real case: sessions saved under 'Pinhole testing #3 em2 em4/em2' now
-    live in '3_shock_test/em2' and every stored absolute path is dead."""
+    """Images are found after a real folder rename that left every stored absolute path dead.
+
+    The sessions were saved under 'Pinhole testing #3 em2 em4/em2' and moved to '3_shock_test/em2'."""
     stage = tmp_path / "3_shock_test" / "em2"
     stage.mkdir(parents=True)
     (stage / "back.TIF").write_bytes(b"x")
@@ -89,8 +90,9 @@ def test_blank_compare_fields_do_not_count_as_a_reference_row():
 
 
 def test_loading_as_reference_uses_the_sessions_own_pair():
-    """v1.0.4 took the blank compare_* defaults here, giving empty paths,
-    zero alignment and default tone settings."""
+    """Loading as a reference uses the session's own pair, not the blank `compare_*` defaults.
+
+    The defaults would give empty paths, zero alignment and default tone settings, as in v1.0.4."""
     session = v1_session("C:/x")
     pair = ImagePair()
     fill_pair_from_session(pair, session)

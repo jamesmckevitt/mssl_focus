@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from . import geometry as geo
 from .camera import RAW_EXTENSIONS, describe_camera, mismatched_settings, read_camera_info
 
-# Inspection images are large on purpose.
+# Inspection images are very large, so Pillow's size limit is turned off.
 Image.MAX_IMAGE_PIXELS = None
 
 IMAGE_FILETYPES = [
@@ -34,18 +34,19 @@ def is_raw(path):
 # --------------------------------------------------------------------------- #
 
 def default_develop():
-    """How an image is built from its file(s).
+    """Default settings for building an image from its files.
 
-    ``exposure`` and ``noise`` apply to camera RAW files.  ``frames`` lists further
-    exposures of the same scene to average with the main file, and ``dark`` lists
-    frames taken with the light off, whose hot pixels and stray light are removed.
+    `exposure` (stops) and `noise` apply to camera RAW files. `frames` lists further
+    exposures of the same scene to average with the main file. `dark` lists frames
+    taken with the light off, whose hot pixels and stray light are removed.
     """
     return {"exposure": 0.0, "noise": "standard", "frames": [], "dark": []}
 
 
 RAW_DEVELOP_DEFAULTS = default_develop()   # read-only reference copy
 
-# name: (colour-noise blur sigma, brightness-noise blur sigma, black point in noise sigmas)
+# Each level is (colour-noise blur sigma in pixels, brightness-noise blur sigma in pixels,
+# black point in noise sigmas).
 RAW_NOISE_LEVELS = {
     "off": (0.0, 0.0, 0.0),
     "light": (1.5, 0.0, 2.0),
@@ -53,8 +54,8 @@ RAW_NOISE_LEVELS = {
     "strong": (3.0, 0.8, 4.0),
 }
 
-# A frame counts as dark-field (backlit through an opaque filter) when its
-# typical pixel is this close to black, as a fraction of full scale.
+# A frame counts as dark-field (backlit through an opaque filter) when its median
+# brightness is below this fraction of full scale.
 DARK_FIELD_MEDIAN = 0.03
 
 
@@ -69,7 +70,9 @@ def _srgb_curve(linear):
 
 
 def _linear_raw(path):
-    """A RAW file as linear RGB in 0..1, cropped to the camera's image area."""
+    """RAW file as linear RGB from 0 to 1, cropped to the camera's image area.
+
+    Returns `(linear, margins)`, with `margins` the `(left, top)` crop in pixels."""
     import rawpy
 
     with rawpy.imread(path) as raw:
@@ -90,8 +93,9 @@ def _linear_raw(path):
 
 
 def raw_crop_margins(path):
-    """The (left, top) margin ``_linear_raw`` crops off a RAW file, read without
-    developing it."""
+    """`(left, top)` margin in pixels that `_linear_raw` crops off a RAW file.
+
+    Read from the file without developing it."""
     import rawpy
 
     with rawpy.imread(path) as raw:
@@ -108,7 +112,9 @@ def raw_crop_margins(path):
 
 
 def check_same_exposure(paths):
-    """Averaging only makes sense for frames taken with identical settings."""
+    """Raise `ValueError` if the frames in `paths` differ in aperture, exposure time or ISO.
+
+    Averaging only makes sense for frames taken with the same settings."""
     first = read_camera_info(paths[0])
     for path in paths[1:]:
         info = read_camera_info(path)
@@ -135,10 +141,10 @@ def _average(paths, load):
 
 
 def _fixed_pattern(dark):
-    """What a light-off frame shows that is not random noise: hot pixels and stray light.
+    """Hot pixels and stray light in a light-off frame, without its random noise.
 
-    Only pixels standing clearly above the dark frame's own noise are kept, so
-    removing the result does not add that noise to the picture.
+    Only pixels more than five noise sigmas above the frame's median are kept, so
+    removing the result does not add the dark frame's noise to the picture.
     """
     luma = dark.mean(axis=2) if dark.ndim == 3 else dark
     sample = luma[::3, ::3]
@@ -152,18 +158,19 @@ def _fixed_pattern(dark):
 def develop_raw(path, dark_field=False, exposure=0.0, noise="standard", frames=(), dark=()):
     """Develop a camera RAW file into an 8-bit RGB image.
 
-    ``frames`` are further exposures to average with it (less noise), and ``dark``
-    are light-off frames whose hot pixels and stray light are removed.
+    `frames` are further exposures to average with it, which lowers the noise. `dark`
+    are light-off frames whose hot pixels and stray light are removed. `noise` is a key
+    of `RAW_NOISE_LEVELS`.
 
-    The frame is cropped to the camera's own image area, so it matches the
-    pixel grid of files converted with the manufacturer's software.
+    The frame is cropped to the camera's own image area, so it matches the pixel
+    grid of files converted with the manufacturer's software. The crop margins are
+    stored in `image.info["raw_crop_margins"]`.
 
-    ``dark_field`` asks for the treatment suited to backlit frames, where a
-    few bright points sit on an otherwise black, noisy background: the black
-    point is set just above the measured noise floor and the remaining range
-    is stretched so those points are clearly visible.  It only takes effect
-    if the frame really is dark.  ``exposure`` is an extra brightening in
-    stops on top of that.
+    `dark_field` asks for the treatment suited to backlit frames, where a few
+    bright points sit on a black, noisy background. The black point is set just
+    above the measured noise floor and the rest of the range is stretched so those
+    points are clearly visible. It only takes effect if the frame's median brightness is
+    below `DARK_FIELD_MEDIAN`. `exposure` is an extra brightening in stops on top of that.
     """
     import cv2
 
@@ -211,7 +218,7 @@ def develop_raw(path, dark_field=False, exposure=0.0, noise="standard", frames=(
     gain = 1.0
     if is_dark:
         black = median + black_sigmas * sigma
-        # Stretch so genuine features are bright; the very brightest 0.01% may clip.
+        # Stretch so genuine features are bright. The brightest 0.01% of pixels may clip.
         peak = float(np.percentile(sample, 99.99)) - black
         gain = float(np.clip(1.6 / max(peak, 1e-6), 1.0, 64.0))
     gain *= 2.0 ** float(exposure)
@@ -229,9 +236,9 @@ def develop_raw(path, dark_field=False, exposure=0.0, noise="standard", frames=(
 def open_image(path, develop=None, dark_field=False):
     """Open a standard or camera RAW image as a fully loaded 8-bit PIL image.
 
-    ``develop`` holds the RAW development settings (see ``RAW_DEVELOP_DEFAULTS``);
-    it is ignored for ordinary image files.  The camera's exposure settings, where
-    the file records them, are returned in ``image.info["camera"]``.
+    `develop` holds the development settings (see `RAW_DEVELOP_DEFAULTS`). Its
+    `exposure` and `noise` are ignored for ordinary image files. The camera's exposure
+    settings, where the file records them, are returned in `image.info["camera"]`.
     """
     settings = default_develop()
     settings.update(develop or {})
@@ -303,9 +310,10 @@ class Pyramid:
         return geo.apply_many(matrix, [(0, 0), (w, 0), (w, h), (0, h)])
 
     def render(self, matrix, size, quality=True, lut=None):
-        """Draw the image into an RGB frame of ``size`` pixels.
+        """Draw the image into an RGB frame of `size` pixels.
 
-        ``matrix`` maps full-resolution image pixels to frame pixels.
+        `matrix` maps full-resolution image pixels to frame pixels. `lut` is a tone
+        curve from `build_lut`, or `None`.
         """
         width, height = max(1, int(size[0])), max(1, int(size[1]))
         scale = geo.scale_of(matrix)
@@ -316,8 +324,8 @@ class Pyramid:
         level_matrix = matrix @ geo.scaling(2 ** level_index)
         inv = geo.invert(level_matrix)
         coefficients = (inv[0, 0], inv[0, 1], inv[0, 2], inv[1, 0], inv[1, 1], inv[1, 2])
-        # While the view is moving, speed matters more than smoothness; the
-        # pre-averaged level already keeps small bright spots from dropping out.
+        # While the view is moving, speed matters more than smoothness. The
+        # pre-averaged level still keeps small bright spots from dropping out.
         resample = Image.Resampling.BICUBIC if quality else Image.Resampling.NEAREST
         fill = CANVAS_BACKGROUND[0] if level.mode == "L" else CANVAS_BACKGROUND
         frame = level.transform(
@@ -329,7 +337,7 @@ class Pyramid:
         if frame.mode != "RGB":
             frame = frame.convert("RGB")
         if lut is not None:
-            # The tone curve also hit the empty surround; put the background back.
+            # The tone curve also changed the empty surround, so put the background back.
             quad = [tuple(p) for p in self.corners(matrix)]
             if not _quad_covers(quad, width, height):
                 mask = Image.new("L", (width, height), 0)
@@ -339,7 +347,7 @@ class Pyramid:
 
 
 def _quad_covers(quad, width, height):
-    """True if the convex quad contains the whole (0, 0)-(width, height) frame."""
+    """True if the convex `quad` contains the whole frame from (0, 0) to (`width`, `height`)."""
     corners = [(0, 0), (width, 0), (width, height), (0, height)]
     sign = 0
     for i in range(4):
@@ -362,10 +370,11 @@ def blank_frame(size):
 
 
 def build_lut(brightness, contrast, blacks, whites, mean):
-    """256-entry tone curve: levels, then brightness, then contrast.
+    """256-entry tone curve applying levels, then brightness, then contrast.
 
-    Contrast pivots on the whole image's mean so the look does not change as
-    the view is panned.  Returns ``None`` when the settings are neutral.
+    `blacks` and `whites` are levels from 0 to 255. Contrast pivots on `mean`, the
+    whole image's mean, so the look does not change as the view is panned. Returns
+    `None` when the settings are neutral.
     """
     if (blacks == 0.0 and whites == 255.0
             and abs(brightness - 1.0) < 1e-3 and abs(contrast - 1.0) < 1e-3):
@@ -373,8 +382,8 @@ def build_lut(brightness, contrast, blacks, whites, mean):
 
     def curve(values):
         out = (values - blacks) * (255.0 / max(whites - blacks, 1.0))
-        # Not clipped again after brightening: lowering contrast must be able to
-        # bring over-bright values back, or blown highlights would turn grey.
+        # Not clipped again after brightening, so lowering contrast can bring
+        # over-bright values back rather than turn blown highlights grey.
         return np.clip(out, 0, 255) * brightness
 
     x = curve(np.arange(256, dtype=np.float32))
@@ -386,14 +395,14 @@ def build_lut(brightness, contrast, blacks, whites, mean):
 def match_tone(target, source, pivot):
     """Brightness and contrast that make one image look like another.
 
-    ``target`` is the luminance (0-255) of the image to adjust, after its own
-    blacks/whites levels but before brightness and contrast.  ``source`` is the
-    luminance of the image to imitate, as displayed.  ``pivot`` is the level
-    the target's contrast turns about (its mean after levels).
+    `target` is the luminance (0-255) of the image to adjust, after its own blacks
+    and whites levels but before brightness and contrast. `source` is the luminance
+    of the image to imitate, as displayed. `pivot` is the level the target's
+    contrast turns about, its mean after levels.
 
-    Returns ``(brightness, contrast)``; contrast is ``None`` when the images are
-    too dark for it to be estimated, in which case only brightness is matched,
-    and both are ``None`` if an image holds nothing bright to compare.
+    Returns `(brightness, contrast)`, each clamped to 0.1-3. `contrast` is `None`
+    when the images are too dark for it to be estimated, and only brightness is
+    matched. Both are `None` if an image holds nothing bright to compare.
     """
     target = np.asarray(target, dtype=np.float32).ravel()
     source = np.asarray(source, dtype=np.float32).ravel()
@@ -401,9 +410,9 @@ def match_tone(target, source, pivot):
     def clamp(value):
         return float(min(3.0, max(0.1, value)))
 
-    # Compare the two brightness distributions point by point, leaving out
-    # values that are clipped to black or white in either image: those carry
-    # no information about how much brighter one image is than the other.
+    # Compare the two brightness distributions point by point. Values clipped to
+    # black or white in either image are left out, since they say nothing about
+    # how much brighter one image is than the other.
     points = np.concatenate([np.linspace(2.0, 98.0, 49), [98.5, 99.0, 99.5, 99.8, 99.95]])
     t_points = np.percentile(target, points)
     s_points = np.percentile(source, points)
@@ -412,7 +421,8 @@ def match_tone(target, source, pivot):
 
     mostly_black = min(t_mid, s_mid, pivot) < 12.0
     if not mostly_black and usable.sum() >= 5 and np.ptp(t_points[usable]) >= 8.0:
-        # Displayed value = b*pivot + c*b*(value - pivot): a straight line in the value.
+        # The displayed value is brightness * (pivot + contrast * (value - pivot)),
+        # a straight line in the value.
         x, y = t_points[usable], s_points[usable]
         # Where both images have blown-out (or fully black) areas, those must stay
         # white (or black) rather than turn grey, so the line is pinned there.
@@ -430,8 +440,8 @@ def match_tone(target, source, pivot):
             brightness = clamp(intercept / pivot + slope)
             return brightness, clamp(slope / brightness)
 
-    # Dark-field frames: nearly everything is black, so compare how far the
-    # bright tail rises above each image's own background.
+    # Dark-field frames are nearly all black, so compare how far the bright tail
+    # rises above each image's own background.
     tail = points >= 90.0
     t_tail = t_points[tail] - t_mid
     s_tail = s_points[tail] - s_mid
@@ -439,13 +449,13 @@ def match_tone(target, source, pivot):
     if usable_tail.sum() >= 3:
         gain = float((s_tail[usable_tail] * t_tail[usable_tail]).sum() / (t_tail[usable_tail] ** 2).sum())
         return clamp(gain), None
-    # Too few bright pixels for that: fall back to the brightest ones.
+    # With too few bright pixels for that, fall back to the brightest ones.
     for point in (99.9, 100.0):
         t_peak = float(np.percentile(target, point)) - t_mid
         s_peak = float(np.percentile(source, point)) - s_mid
         if t_peak > 4.0 and s_peak > 4.0:
             return clamp(s_peak / t_peak), None
-    return None, None   # nothing bright in one of them: no basis for a match
+    return None, None   # nothing bright in one of them, so no basis for a match
 
 
 # --------------------------------------------------------------------------- #
@@ -524,7 +534,9 @@ def _denoise_blur_fallback(base, amount, color_amount, edge_amount, aggressive):
 
 
 def denoise(base, amount, color_amount, edge_amount, aggressive):
-    """Non-local-means noise reduction (OpenCV), with a blur fallback."""
+    """Non-local-means noise reduction with OpenCV, or a Gaussian blur without it.
+
+    `amount`, `color_amount` and `edge_amount` run from 0 to 100."""
     try:
         import cv2
     except ImportError:

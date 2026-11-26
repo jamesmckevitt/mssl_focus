@@ -1,4 +1,4 @@
-"""In-app guidance: the step-by-step guide, shortcut list and About box."""
+"""In-app step-by-step guide, shortcut list and About box."""
 
 import tkinter as tk
 from tkinter import ttk
@@ -6,115 +6,118 @@ from tkinter import ttk
 from . import theme
 from .metadata import APP_AUTHOR, APP_EMAIL, APP_INSTITUTION, APP_VERSION
 
-# (heading, paragraphs).  A paragraph starting with "- " is shown as a bullet.
+# Each section is (heading, paragraphs). A paragraph starting with "- " is shown as a bullet.
 GUIDE = [
     ("1.  Load the two images of a filter", [
-        "Each inspection uses two photographs of the same filter: a backlit image (light shining "
-        "through, so pinholes show as bright points) and a frontlit image (surface detail).",
+        "Each inspection uses two photographs of the same filter. The backlit image has light "
+        "shining through, so pinholes show as bright points. The frontlit image shows the surface.",
         "- Click the empty Backlit panel and choose the backlit file, then do the same for Frontlit.",
-        "- TIFF, PNG, JPEG and camera RAW files (ARW, NEF, CR2, DNG, ...) all work.",
-        "- Under 'Brightness, contrast and noise' each slider has a box for typing an exact value, "
-        "and Save settings / Load settings keep one look for all backlit (or frontlit) images.  "
+        "- TIFF, PNG, JPEG and camera RAW files (ARW, NEF, CR2, DNG and others) all work.",
+        "- Under 'Brightness, contrast and noise' each slider has a box for typing an exact value. "
+        "Save settings and Load settings keep one look for all backlit (or frontlit) images. "
         "Loading shows the camera settings the look was saved with, and warns if this image was "
         "taken differently.",
-        "- Under each panel's title is how that photograph was taken: aperture, exposure time, ISO, "
-        "focal length and camera.  With a reference row loaded, a setting shown in red differs "
-        "from the matching image in the other row.",
-        "- To cut noise, select several identical exposures together when loading an image (hold "
-        "Ctrl or Shift in the file window): they are averaged.  A dark frame, taken with the same "
+        "- Under each panel's title are the aperture, exposure time, ISO, focal length and camera of "
+        "that photograph. With a reference row loaded, a setting shown in red differs from the "
+        "matching image in the other row.",
+        "- To reduce noise, select several identical exposures together when loading an image (hold "
+        "Ctrl or Shift in the file window), and they are averaged. A dark frame, taken with the same "
         "exposure and the light off, can be chosen under 'Brightness, contrast and noise' to remove "
         "hot pixels and stray light.",
-        "- Camera RAW files can be loaded as they are, with no conversion step.  A backlit RAW "
-        "frame is developed for dark-field viewing: the noise floor becomes black and pinholes are "
-        "brightened.  Exposure and noise reduction are under 'Brightness, contrast and noise'.",
-        "- Drag to pan and scroll to zoom.  All panels move together and the red crosshair marks "
-        "the same spot in each.  Press F to fit the image to the window.",
+        "- Camera RAW files load as they are, with no conversion step. A backlit RAW frame is "
+        "developed for dark-field viewing, so the noise floor becomes black and pinholes are "
+        "brightened. Exposure and noise reduction are under 'Brightness, contrast and noise'.",
+        "- Drag to pan and scroll to zoom. All panels move together and the red crosshair marks "
+        "the same spot in each. Press F to fit the image to the window.",
     ]),
     ("2.  Make the filter upright (Level)", [
         "If the filter is slightly rotated in the photographs, straighten it first so every "
         "inspection is viewed the same way up.",
         "- Choose Level (L).",
         "- Find an edge that should be vertical, such as a mesh bar or the edge of the frame, and "
-        "drag along it.  A longer line gives a more accurate result.",
+        "drag along it. A longer line gives a more accurate result.",
         "- Both images rotate together so that the line becomes vertical.",
         "- Fine-tune with Ctrl+Left / Ctrl+Right, or type a value under Alignment > Both images.",
     ]),
     ("3.  Align the frontlit image to the backlit image", [
-        "The two photographs are rarely pixel-for-pixel identical.  Aligning them makes a marker "
+        "The two photographs are rarely pixel-for-pixel identical. Aligning them makes a marker "
         "sit on the same feature in both.",
         "- Choose Align (G).",
         "- Click a small, sharp feature on the backlit image, then the same feature on the "
-        "frontlit image.  Numbered points appear.",
-        "- Repeat for at least two features, as far apart as possible.  Three or more gives a "
-        "better fit and reports the residual error.",
-        "- Press Apply (or Enter).  Right-click removes the last point; Esc clears them all.",
+        "frontlit image. Numbered points appear.",
+        "- Repeat for at least two features, as far apart as possible. Three or more give a "
+        "better fit and report the residual error.",
+        "- Press Apply (or Enter). Right-click removes the last point, and Esc clears them all.",
         "- Tick 'Allow scale change' only if the images were taken at different magnifications.",
-        "- Check the result in Overlay view (O): slide Frontlit mix back and forth and look for "
-        "features that jump.  Arrow keys nudge by one pixel while the Align tool is active.",
+        "- Check the result in Overlay view (O). Slide Frontlit mix back and forth and look for "
+        "features that jump. Arrow keys nudge by one pixel while the Align tool is active.",
     ]),
     ("4.  Mark what you find (Annotate)", [
-        "- Choose Annotate (A) and pick a colour in the Annotations panel.  Use one colour per "
+        "- Choose Annotate (A) and pick a colour in the Annotations panel. Use one colour per "
         "category, for example incoming pinholes, repairs, or damage found after a test.",
-        "- The first time a colour is used you are asked for its legend name and a label prefix; "
-        "markers are then numbered automatically (T1, T2, ...).",
-        "- Click a feature to mark it.  Dragging still pans, so you do not need to switch tools.",
-        "- Not sure something is a pinhole?  Tick 'Unsure (?)' in the blue bar (or press U, or hold "
-        "Shift while clicking): the marker gets a question mark after its label and is counted as "
-        "'unsure' in the legend.  Right-click a marker to change it later.",
-        "- Right-click a marker to delete it, edit its label or change its colour.  Use Move (M) "
-        "to drag a marker.  Ctrl+Z undoes any change.",
+        "- The first time a colour is used you are asked for its legend name and a label prefix. "
+        "Markers are then numbered automatically (T1, T2, ...).",
+        "- Click a feature to mark it. Dragging still pans, so you do not need to switch tools.",
+        "- Not sure something is a pinhole? Tick 'Unsure (?)' in the blue bar, press U, or hold "
+        "Shift while clicking. The marker gets a question mark after its label and is counted as "
+        "'unsure' in the legend. Right-click a marker to change it later.",
+        "- Right-click a marker to delete it, edit its label or change its colour. Use Move (M) "
+        "to drag a marker. Ctrl+Z undoes any change.",
     ]),
     ("5.  Let the software find pinholes", [
-        "- Choose Find pinholes (D).  The first time, say where the filter is: drag from one corner "
-        "of the membrane to the opposite corner.  A second line of controls appears in the blue bar.",
-        "- Search area: raise 'Corner radius' until the dashed line follows the rounded corners of "
-        "the filter, and use 'Inset' to pull it just inside the edge, so glints from the frame are "
-        "left out.  'Redraw' lets you drag it out again.  The area is saved with the session and "
-        "carried to later inspections through the reference row (shown in purple).",
-        "- Every small bright spot inside the area that has no marker is circled: green for clear, "
-        "yellow for likely, orange for faint.  Zoom out to see them all.",
-        "- Sensitivity: move the slider and the circles update at once.  50 offers only unmistakable "
-        "spots, 75 also likely ones, 100 everything (the faintest are mostly noise).",
-        "- 'Add all' puts a marker on every circled spot in one go.  'Review one by one' shows each "
-        "in turn, zoomed in: Enter accepts, S skips, X rejects, and Esc returns to the overview.",
-        "- Not sure?  Press U: the marker is added with a question mark after its label and counted "
-        "as 'unsure' in the legend.  Right-click a marker later to confirm it.",
+        "- Choose Find pinholes (D). The first time, show where the filter is by dragging from one "
+        "corner of the membrane to the opposite corner. A second line of controls appears in the "
+        "blue bar.",
+        "- Raise 'Corner radius' until the dashed line of the search area follows the rounded "
+        "corners of the filter, and use 'Inset' to pull it just inside the edge, so glints from the "
+        "frame are left out. 'Redraw' lets you drag it out again. The area is saved with the "
+        "session and carried to later inspections through the reference row (shown in purple).",
+        "- Every small bright spot inside the area that has no marker is circled, green for clear, "
+        "yellow for likely and orange for faint. Zoom out to see them all.",
+        "- Move the Sensitivity slider and the circles update at once. At 50 only unmistakable "
+        "spots are offered, at 75 likely ones too, and at 100 everything (the faintest are mostly "
+        "noise).",
+        "- 'Add all' puts a marker on every circled spot in one go. 'Review one by one' shows each "
+        "in turn, zoomed in. Enter accepts, S skips, X rejects, and Esc returns to the overview.",
+        "- Not sure? Press U, and the marker is added with a question mark after its label and "
+        "counted as 'unsure' in the legend. Right-click a marker later to confirm it.",
         "- With a reference row loaded and aligned, spots that are not in the earlier image come "
-        "first and are labelled as new; tick 'Only new since reference' to see just those.",
+        "first and are labelled as new. Tick 'Only new since reference' to see just those.",
         "- 'Centre markers on pinholes' moves each existing marker onto the bright spot inside its "
-        "circle, for example after copying markers from the reference row.  Markers with no spot "
-        "are left alone and listed in the status bar.  For a single marker, right-click it and "
+        "circle, for example after copying markers from the reference row. Markers with no spot "
+        "are left alone and listed in the status bar. For a single marker, right-click it and "
         "choose 'Centre on the bright spot'.",
-        "- The search suggests; you decide.  Check candidates against the frontlit image, since dust "
-        "and glints can also look bright.",
+        "- The search suggests and you decide. Check candidates against the frontlit image, since "
+        "dust and glints can also look bright.",
     ]),
     ("6.  Save the session", [
-        "- A session is one inspection: one row.  Ctrl+S saves the current (top) row: which images, "
-        "the alignment, markers, legend and display settings, but not the image data itself.",
-        "- The reference row is never saved into it.  It is another inspection, with a session file "
-        "of its own.  To change that one, use 'Swap rows' so it becomes the current row, then save.",
-        "- Keep the session file in the same folder as its images.  The session then still opens "
+        "- A session is one inspection, which is one row. Ctrl+S saves the current (top) row with "
+        "its images, alignment, markers, legend and display settings, but not the image data "
+        "itself.",
+        "- The reference row is never saved into it. It is another inspection, with a session file "
+        "of its own. To change that one, use 'Swap rows' so it becomes the current row, then save.",
+        "- Keep the session file in the same folder as its images. The session then still opens "
         "after the folder is moved, renamed or synced to another computer.",
         "- A star in the title bar means there are unsaved changes.",
-        "- A filter history (for example em2.json, made from the command line) opens the same way: "
-        "choose an inspection and it shows every pinhole known up to it.  Ctrl+S saves back into the "
-        "history: moved markers move their pinhole, new markers become new pinholes, and a deleted "
+        "- A filter history (for example em2.json, made with the command line) opens the same way. "
+        "Choose an inspection and it shows every pinhole known up to it. Ctrl+S saves back into the "
+        "history. Moved markers move their pinhole, new markers become new pinholes, and a deleted "
         "marker rejects its pinhole, so it is skipped when found again.",
     ]),
     ("7.  Compare with an earlier inspection", [
         "To see what a test did to a filter, show the earlier inspection underneath the new one.",
         "- Open the newer session (or load its images) as usual.",
-        "- File > Open session into reference row, and choose the earlier inspection's session file.  It "
-        "appears as the reference row, with its own alignment and markers (dashed circles).",
-        "- Choose Align rows (R).  Click a feature of the filter in the top row, then the same "
-        "feature in the bottom row; repeat for two or more features and press Apply.",
-        "- The crosshair now marks the same place on the filter in all four panels.  When you save, "
+        "- Use File > Open session into reference row, and choose the earlier inspection's session "
+        "file. It appears as the reference row, with its own alignment and markers (dashed circles).",
+        "- Choose Align rows (R). Click a feature of the filter in the top row, then the same "
+        "feature in the bottom row. Repeat for two or more features and press Apply.",
+        "- The crosshair then marks the same place on the filter in all four panels. When you save, "
         "the session remembers how it lines up with that reference session, so the alignment comes "
         "back the next time you load the two together.",
-        "- Loaded them the wrong way round?  'Swap rows' in the Images panel exchanges the two, each "
+        "- Loaded them the wrong way round? 'Swap rows' in the Images panel exchanges the two, each "
         "keeping its own markers, settings and alignment.",
         "- If the two inspections were photographed with different exposures, open 'Brightness, "
-        "contrast and noise' and use 'Match brightness between rows'.  Choose which row to adjust "
+        "contrast and noise' and use 'Match brightness between rows'. Choose which row to adjust "
         "(reference to look like current, or the other way round) and whether to match the backlit "
         "images, the frontlit images or both, then press Match.",
         "- Edit > Copy markers from reference row brings the earlier markers into the current "
@@ -215,7 +218,7 @@ def show_guide(app):
 
     text.insert(tk.END, "Inspecting a filter, step by step\n", "title")
     text.insert(tk.END, "The blue bar under the toolbar always tells you what the selected tool "
-                        "expects next.  This guide stays open while you work.\n", "muted")
+                        "expects next. This guide stays open while you work.\n", "muted")
     for heading, paragraphs in GUIDE:
         text.insert(tk.END, heading + "\n", "heading")
         for paragraph in paragraphs:
@@ -253,7 +256,7 @@ def show_about(app):
     text.insert(tk.END, "Filter Optical Characterisation Utility Software\n")
     text.insert(tk.END, f"Version {APP_VERSION}\n\n", "muted")
     text.insert(tk.END, f"{APP_AUTHOR}, {APP_INSTITUTION}\n{APP_EMAIL}\n\n")
-    text.insert(tk.END, "Copyright (c) 2026 James McKevitt, UCL Mullard Space Science Laboratory.  "
+    text.insert(tk.END, "Copyright (c) 2026 James McKevitt, UCL Mullard Space Science Laboratory. "
                         "All rights reserved.\n", "muted")
     text.configure(state=tk.DISABLED)
     app._centre_dialog(window)

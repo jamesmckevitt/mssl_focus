@@ -1,4 +1,4 @@
-﻿"""Test setup: render windows at native resolution, as the real app does."""
+"""Test setup that renders windows at native resolution, as the real app does."""
 import sys
 
 if sys.platform == "win32":

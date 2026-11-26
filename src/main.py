@@ -11,7 +11,7 @@ def _enable_windows_dpi_awareness():
     import ctypes
 
     try:
-        # Windows 10 1703+: sharp rendering when a window changes monitors too.
+        # Per-monitor awareness, from Windows 10 version 1703, keeps windows sharp across monitors.
         if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
             return
     except (AttributeError, OSError):
@@ -72,10 +72,10 @@ from .license_flow import check_license
 
 
 def _install_error_reporting(root):
-    """Tell the user when something goes wrong instead of failing silently.
+    """Show unhandled errors in window callbacks and log them to `error.log` in the settings folder.
 
-    The packaged app has no console, so an unhandled error in a button or mouse
-    handler would otherwise just look like the click did nothing.
+    The packaged app has no console, so an unhandled error in a button or mouse handler would
+    otherwise look as if the click did nothing.
     """
     import datetime
     import traceback

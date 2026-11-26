@@ -1,4 +1,4 @@
-"""Drawing an export: marker labels kept readable where markers crowd together."""
+"""Export drawing, with marker labels kept readable where markers crowd together."""
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -41,7 +41,7 @@ def test_crowded_labels_never_overlap_each_other_or_other_markers():
 
 
 def _covers(ring_r, gaps, centre, point, band, spot):
-    """Whether a circle drawn as laid out runs over a spot of radius ``spot`` at ``point``."""
+    """Whether the circle laid out by `ring_r` and `gaps` runs over a spot of radius `spot` at `point`."""
     import math
     dx, dy = point[0] - centre[0], point[1] - centre[1]
     angle = math.degrees(math.atan2(dy, dx)) % 360.0

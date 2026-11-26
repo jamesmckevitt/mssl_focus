@@ -22,8 +22,10 @@ class AnnotationMixin:
     # ------------------------------------------------------------------ #
 
     def _annotation_canvas_circle(self, row, ann):
-        """Centre and radius of a marker on screen.  Markers live in backlit-image
-        pixels, and every canvas shares one view, so this holds for all panes of a row."""
+        """Centre and radius of a marker on screen.
+
+        Markers are stored in backlit-image pixels and every canvas shares one view, so the result
+        holds for all panes of a row."""
         x, y = self.image_to_canvas(row, BACKLIT, ann["img1_x"], ann["img1_y"])
         scale = self.zoom * (self.row_shift["scale"] if row == REFERENCE else 1.0)
         return x, y, max(3.0, ann["radius"] * scale)
@@ -42,7 +44,7 @@ class AnnotationMixin:
     # ------------------------------------------------------------------ #
 
     def _click_annotate(self, pane, x, y, unsure=False):
-        """Place a marker; ``unsure`` (or the 'Unsure' box) flags it with a question mark."""
+        """Place a marker, flagged with a question mark if `unsure` is true or the 'Unsure' box is ticked."""
         unsure = unsure or bool(self.annot_unsure_var.get())
         if pane.row != CURRENT:
             self.set_status("Markers belong to the current (top) row.  The reference row is read-only.")
@@ -74,7 +76,9 @@ class AnnotationMixin:
                         + (", marked as unsure (?)" if unsure else "") + ".  Ctrl+Z undoes.")
 
     def _ask_colour_details(self, colour):
-        """First use of a colour: ask what it means and how its markers are numbered."""
+        """Ask for the legend name and label prefix of a colour used for the first time.
+
+        Returns `(name, prefix)`, or None if the dialog is cancelled."""
         pair = self.pairs[CURRENT]
         dialog = tk.Toplevel(self.root)
         dialog.title("New marker colour")
@@ -197,7 +201,7 @@ class AnnotationMixin:
         self._draw_overlays()
 
     def copy_reference_annotations(self):
-        """Bring the reference row's markers into the current row, through the row alignment."""
+        """Copy the reference row's markers into the current row using the row alignment."""
         current, reference = self.pairs
         if not reference.annotations:
             messagebox.showinfo(
@@ -263,7 +267,7 @@ class AnnotationMixin:
             self.set_annotation_colour(result[1].lower())
 
     def _on_legend_fields_changed(self):
-        """Legend name / prefix entries edit the entry for the current colour."""
+        """Store the legend name and label prefix typed for the current colour."""
         if self._syncing:
             return
         pair = self.pairs[CURRENT]
@@ -406,7 +410,7 @@ class AnnotationMixin:
                                   font=self.fonts["bold"], tags="hud")
         items = [item]
 
-        # Below it: how the photograph was taken.  A setting that differs from the
+        # Below the title, the camera settings of the photograph. A setting that differs from the
         # matching image in the other row is shown in red.
         if overlay:
             lines = [(name + ":  ", i) for i, name in ((BACKLIT, "Backlit"), (FRONTLIT, "Frontlit"))

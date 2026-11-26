@@ -1,8 +1,8 @@
-"""2D similarity transforms shared by rendering, click handling and alignment.
+"""2D similarity transforms for rendering, click handling and alignment.
 
-Everything is a 3x3 homogeneous matrix acting on column vectors in image-style
-coordinates (x right, y down).  A positive rotation angle turns content
-clockwise on screen, matching the convention saved in session files.
+Transforms are 3x3 homogeneous matrices acting on column vectors in image
+coordinates (x right, y down). A positive rotation angle turns content clockwise
+on screen, as in session files.
 """
 
 import math
@@ -29,7 +29,7 @@ def scaling(factor):
 
 
 def about(centre, scale=1.0, deg=0.0):
-    """Rotate by ``deg`` and scale by ``scale`` about ``centre``."""
+    """Rotation by `deg` degrees and scaling by `scale` about `centre`."""
     theta = math.radians(deg)
     c = math.cos(theta) * scale
     s = math.sin(theta) * scale
@@ -72,10 +72,10 @@ def wrap_angle(deg):
 
 
 def fit_similarity(src, dst, allow_scale=True):
-    """Least-squares similarity transform mapping ``src`` points onto ``dst``.
+    """Least-squares similarity transform mapping `src` points onto `dst`.
 
-    Returns ``(matrix, rms_residual)``.  With ``allow_scale=False`` the fit is
-    rigid (rotation and translation only).
+    Returns `(matrix, rms_residual)`. With `allow_scale=False` the fit is rigid,
+    rotation and translation only.
     """
     src = np.asarray(src, dtype=float).reshape(-1, 2)
     dst = np.asarray(dst, dtype=float).reshape(-1, 2)
@@ -112,8 +112,9 @@ def fit_similarity(src, dst, allow_scale=True):
 
 
 def decompose_about(matrix, centre):
-    """Split a similarity into ``(scale, deg, tx, ty)`` such that
-    ``matrix == translation(tx, ty) @ about(centre, scale, deg)``."""
+    """Similarity `matrix` split into `(scale, deg, tx, ty)` about `centre`.
+
+    The parts satisfy `matrix == translation(tx, ty) @ about(centre, scale, deg)`."""
     scale = scale_of(matrix)
     deg = angle_of(matrix)
     cx, cy = centre
@@ -127,7 +128,7 @@ def rounded_rectangle(x0, y0, x1, y1, radius, steps=10):
     if radius <= 0.0:
         return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     points = []
-    # centre of each corner arc and the angle (degrees) at which that arc starts
+    # Centre of each corner arc and the angle in degrees where the arc starts
     for cx, cy, start in ((x0 + radius, y0 + radius, 180.0), (x1 - radius, y0 + radius, 270.0),
                           (x1 - radius, y1 - radius, 0.0), (x0 + radius, y1 - radius, 90.0)):
         for n in range(steps + 1):

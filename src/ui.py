@@ -1,4 +1,4 @@
-"""Window layout: menu, toolbar, guidance bar, image panels, sidebar and status bar."""
+"""Window layout with the menu, toolbar, guidance bar, image panels, sidebar and status bar."""
 
 import os
 import tkinter as tk
@@ -334,7 +334,7 @@ class UIBuilderMixin:
                              lambda e: self.hint_label.configure(wraplength=max(200, e.width - self.px(8))))
 
     def _build_search_bar(self):
-        """Second line of the guidance bar, shown while finding pinholes: where to look and how hard."""
+        """Second line of the guidance bar with the search area and Sensitivity controls for Find pinholes."""
         bar = ttk.Frame(self.hint_bar, style="Hint.TFrame")
         self.search_bar = bar
         pad = self.px(3)
@@ -551,7 +551,7 @@ class UIBuilderMixin:
         self._build_export_section(self._section(inner, "export", "Export", open_by_default=False))
 
     def _section(self, parent, key, title, open_by_default=True):
-        """A titled block that collapses when its header is clicked."""
+        """Titled sidebar block that collapses when its header is clicked."""
         states = self.config.get("sections", {})
         is_open = bool(states.get(key, open_by_default))
         wrapper = ttk.Frame(parent)
@@ -603,7 +603,7 @@ class UIBuilderMixin:
         return box
 
     def _slider(self, parent, label, var, low, high, command, fmt="{:.2f}", label_width=11):
-        """A slider with a box beside it showing the value, where an exact value can be typed."""
+        """Slider with a box beside it that shows the value and accepts a typed value."""
         row = self._row(parent, 3)
         ttk.Label(row, text=label, width=label_width).pack(side=tk.LEFT)
         text = tk.StringVar()
@@ -907,7 +907,7 @@ class UIBuilderMixin:
     # ------------------------------------------------------------------ #
 
     def _control_row(self):
-        """Which row the Alignment panel edits."""
+        """Row the Alignment panel edits."""
         if self.control_row_var.get() == REFERENCE and self._reference_ready():
             return REFERENCE
         return CURRENT
@@ -1075,8 +1075,7 @@ class UIBuilderMixin:
         self._schedule_render()
 
     def match_to_other_row(self):
-        """Give the chosen images of the chosen row the brightness and contrast that make
-        each look like its counterpart in the other row."""
+        """Match brightness and contrast of the chosen images to their counterparts in the other row."""
         row = dict(MATCH_DIRECTIONS).get(self.match_direction_var.get(), REFERENCE)
         wanted = dict(MATCH_SCOPES).get(self.match_scope_var.get(), (BACKLIT, FRONTLIT))
         other_row = REFERENCE if row == CURRENT else CURRENT

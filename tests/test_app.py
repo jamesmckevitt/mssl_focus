@@ -19,7 +19,7 @@ SIZE = (1200, 800)
 
 
 def placed(point, rotation=0.0, shift=(0, 0), scale=1.0):
-    """Where ``make_filter_image`` draws a dot given the same transform."""
+    """Where `make_filter_image` draws a dot given the same transform."""
     cx, cy = SIZE[0] / 2, SIZE[1] / 2
     theta = math.radians(rotation)
     dx, dy = (point[0] - cx) * scale, (point[1] - cy) * scale
@@ -110,7 +110,7 @@ def test_point_alignment_registers_frontlit_to_backlit(app, tmp_path):
     for dot in DOTS:
         assert geo.apply(front_to_back, *placed(dot, *front)) == pytest.approx(placed(dot, *back), abs=0.75)
     assert pair.scale == pytest.approx(1.0)
-    # The same feature now sits under the same canvas position in both panels.
+    # After alignment the same feature sits under the same canvas position in both panels.
     for dot in DOTS:
         on_back = app.image_to_canvas(0, BACKLIT, *placed(dot, *back))
         on_front = app.image_to_canvas(0, FRONTLIT, *placed(dot, *front))
@@ -216,8 +216,8 @@ def test_reference_session_brings_its_alignment_and_markers(app, tmp_path):
     assert reference.label == "1_incoming / em9"
     assert len(app.visible_panes()) == 4
 
-    # Align the rows on three features, then every feature must coincide on screen
-    # in all four panels -- including the reference frontlit image.
+    # After aligning the rows on three features, every feature must coincide on screen in all
+    # four panels, including the reference frontlit image.
     app.set_tool("align_rows")
     for dot in (DOTS[0], DOTS[4], DOTS[3]):
         click(app, pane(app, 0, BACKLIT), *app.image_to_canvas(0, BACKLIT, *placed(dot, *back2)))
@@ -229,12 +229,12 @@ def test_reference_session_brings_its_alignment_and_markers(app, tmp_path):
         assert app.image_to_canvas(1, BACKLIT, *placed(dot, *back1)) == pytest.approx(target, abs=0.75)
         assert app.image_to_canvas(1, FRONTLIT, *placed(dot, *front1)) == pytest.approx(target, abs=1.0)
 
-    # What is drawn agrees with the maths: the reference backlit dot is under that pixel.
+    # What is drawn agrees with the maths, with the reference backlit dot under that pixel.
     frame = app._render_frame(1, BACKLIT, (1300, 800), app.view_matrix(), True)
     expected = app.image_to_canvas(1, BACKLIT, *placed(DOTS[2], *back1))
     assert dot_centroid(frame, expected) == pytest.approx(expected, abs=1.0)
 
-    # Carry the markers forward: they land on the same features in the new images.
+    # Markers carried forward land on the same features in the new images.
     app.copy_reference_annotations()
     current = app.pairs[0]
     assert len(current.annotations) == len(DOTS)
@@ -243,7 +243,7 @@ def test_reference_session_brings_its_alignment_and_markers(app, tmp_path):
     app.copy_reference_annotations()
     assert len(current.annotations) == len(DOTS), "copying twice must not duplicate markers"
 
-    # A session is the current row only: the reference row is not saved into it.
+    # A session holds the current row only, so the reference row is not saved into it.
     app._write_session(str(stage2 / "session.json"))
     row_shift = dict(app.row_shift)
     saved = read_session(stage2 / "session.json")
@@ -264,14 +264,14 @@ def test_reference_session_brings_its_alignment_and_markers(app, tmp_path):
     assert app.pairs[1].label == "1_incoming / em9"
     assert "restored" in app.status_var.get()
 
-    # ... also if that row has been levelled differently in the meantime: the features still coincide.
+    # The features still coincide if that row has been levelled differently in the meantime.
     app.pairs[0].set_global_rotation(app.pairs[0].glob_rot + 0.8)
     app._restore_row_alignment()
     for dot in DOTS:
         target = app.image_to_canvas(0, BACKLIT, *placed(dot, *back2))
         assert app.image_to_canvas(1, BACKLIT, *placed(dot, *back1)) == pytest.approx(target, abs=0.75)
 
-    # ... and when the two are loaded the other way round.
+    # They also coincide when the two are loaded the other way round.
     app.new_session()
     app.open_session(str(stage1 / "session.json"))
     wait_idle(app)
@@ -303,7 +303,7 @@ def test_an_earlier_two_row_session_loads_its_own_row_only(app, tmp_path):
     load_stage(app, stage2)
     app._write_session(str(stage2 / "session.json"))
 
-    # As versions up to 1.1.0-dev7 wrote it: the reference row inside the session.
+    # Versions up to 1.1.0-dev7 wrote the reference row inside the session.
     old = read_session(stage2 / "session.json")
     first = read_session(stage1 / "session.json")
     old.pop("row_alignments")
@@ -335,20 +335,20 @@ def test_an_earlier_two_row_session_loads_its_own_row_only(app, tmp_path):
     assert not app.pairs[1].has_any_image() and not app.show_reference_var.get()
     assert len(app.visible_panes()) == 2
 
-    # The alignment it held is not lost: it returns with the reference session.
+    # The alignment it held is not lost, since it returns with the reference session.
     app.open_session(str(stage1 / "session.json"), row=1)
     wait_idle(app)
     assert app.row_shift == pytest.approx({"x": shift[0], "y": shift[1], "rot": 0.0, "scale": 1.0}, abs=1e-6)
     assert len(app.pairs[1].annotations) == 1
 
-    # Loaded as a reference, it is again only its own row that is taken.
+    # Loaded as a reference, again only its own row is taken.
     app.new_session()
     load_stage(app, stage1)
     app.open_session(str(stage2 / "session.json"), row=1)
     wait_idle(app)
     assert app.pairs[1].label == "2_shock / em9" and app.pairs[1].paths[BACKLIT] == str(stage2 / "back.png")
 
-    # Saving rewrites the file in the new form.
+    # Saving rewrites the file in the current format.
     app.new_session()
     app.open_session(str(stage2 / "session.json"))
     wait_idle(app)
@@ -566,7 +566,7 @@ def test_new_pinholes_are_offered_first_when_a_reference_is_loaded(app, tmp_path
     app.detect_new_only_var.set(True)
     assert len(app._review_candidates()) == 2
 
-    # Moving the row alignment is noticed: the search is repeated rather than trusted.
+    # Moving the row alignment is noticed, so the search is repeated rather than trusted.
     assert app._detection_covers(app.effective_outline())
     app.set_row_matrix(geo.translation(300, 0) @ app.row_matrix())
     assert not app._detection_covers(app.effective_outline())
@@ -596,10 +596,10 @@ def test_an_exact_value_can_be_typed_beside_a_slider(app, tmp_path):
     commit()
     assert app.pairs[0].adjust[BACKLIT]["brightness"] == 2.0
     assert text.get() == "2.00"
-    text.set("99")                      # beyond the slider's range: held at its limit
+    text.set("99")                      # beyond the slider's range, so held at its limit
     commit()
     assert app.pairs[0].adjust[BACKLIT]["brightness"] == 3.0
-    text.set("oops")                    # not a number: the box goes back to the real value
+    text.set("oops")                    # not a number, so the box goes back to the real value
     commit()
     assert text.get() == "3.00"
     app.undo()
@@ -816,7 +816,8 @@ def test_settings_that_differ_between_rows_are_shown_in_red(app, tmp_path):
     wait_idle(app)
     app.load_image_path(str(save_with_exif(tmp_path / "front_old.jpg", 8, (1, 5))), FRONTLIT, 1)
     wait_idle(app)
-    # Backlit: only the aperture changed.  Frontlit: aperture and exposure time.
+    # Only the aperture differs between the backlit images, and aperture and exposure time between
+    # the frontlit images.
     assert red(0, BACKLIT) == ["f/9"] and red(1, BACKLIT) == ["f/8"]
     assert red(0, FRONTLIT) == ["1/4 s", "f/9"] and red(1, FRONTLIT) == ["1/5 s", "f/8"]
 
@@ -841,7 +842,7 @@ def test_loading_settings_reports_the_camera_they_were_saved_with(app, tmp_path,
     assert saved["camera"]["f_number"] == 8.0 and saved["camera"]["exposure_time"] == 0.2
     assert saved["saved_from"] == "front_a.jpg"
 
-    # Same camera settings: the user is told so.
+    # With the same camera settings the user is told so.
     app.pairs[0].adjust[FRONTLIT]["brightness"] = 1.0
     app.load_image_settings(str(preset))
     wait_idle(app)
@@ -850,7 +851,7 @@ def test_loading_settings_reports_the_camera_they_were_saved_with(app, tmp_path,
     assert "are the same" in message and "different" not in message
     assert app.pairs[0].adjust[FRONTLIT]["brightness"] == 1.5
 
-    # A photo taken differently: the differences are listed, and declining changes nothing.
+    # For a photo taken differently the differences are listed, and declining changes nothing.
     app.new_session()
     app.load_image_path(str(save_with_exif(tmp_path / "front_b.jpg", 9, (1, 4))), FRONTLIT)
     wait_idle(app)
@@ -905,7 +906,7 @@ def test_rows_can_be_swapped_when_loaded_the_wrong_way_round(app, tmp_path):
     assert app.session_path == str(stage1 / "session.json")
     assert app.dirty and not app._undo_stack
     assert app.show_reference_var.get()
-    # The rows are still registered to each other: every feature coincides on screen.
+    # The rows stay registered to each other, so every feature coincides on screen.
     for dot in DOTS:
         on_current = app.image_to_canvas(0, BACKLIT, *placed(dot, *back1))
         assert app.image_to_canvas(1, BACKLIT, *placed(dot, *back2)) == pytest.approx(on_current, abs=0.75)
@@ -979,8 +980,10 @@ def test_a_bad_dark_frame_is_reported_and_not_kept(app, tmp_path):
 
 
 def _stage_with_edge_glints(folder, faint=()):
-    """A filter whose membrane spans (200..1000, 150..650) with rounded corners; pinholes
-    inside it, and bright glints on the frame just outside its edge and in its square corners."""
+    """Filter whose membrane spans x 200 to 1000 and y 150 to 650, with rounded corners.
+
+    Pinholes lie inside it, and bright glints sit on the frame just outside its edge and in its
+    square corners. `faint` lists positions of extra dim spots."""
     from PIL import ImageDraw
 
     folder.mkdir(parents=True)
@@ -1020,7 +1023,7 @@ def test_the_search_area_keeps_frame_glints_out_of_the_search(app, tmp_path):
     assert [c["tier"] for c in app._candidates].count("faint") == 1
     assert len(app._review_candidates()) == len(DOTS), "faint spots are left out at the usual sensitivity"
 
-    # With square corners and no inset the glints on the frame come in; no new search is needed.
+    # With square corners and a negative inset the glints on the frame come in; no new search is needed.
     searched = app._detection
     app._last_checkpoint = (None, 0.0)     # as if a moment had passed since the drag
     app.outline_radius_var.set("0")

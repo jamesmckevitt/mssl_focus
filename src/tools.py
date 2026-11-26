@@ -1,4 +1,4 @@
-"""The single active tool: mouse and keyboard handling, alignment and on-screen guidance."""
+"""Active tool selection, mouse and keyboard handling, alignment and on-screen guidance."""
 
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -108,7 +108,7 @@ class ToolsMixin:
         first, second = ("a", "b") if self.tool_var.get() == "align" else ("cur", "ref")
         if not state[first] and not state[second]:
             return
-        # Remove whichever point was placed last.
+        # Remove the point placed last.
         key = self._tool_point_order.pop() if self._tool_point_order else (
             first if len(state[first]) > len(state[second]) else second)
         if state[key]:
@@ -630,8 +630,10 @@ class ToolsMixin:
         return f"Residual {rms:.1f} px."
 
     def _draw_align_guide(self):
-        """While aligning without scale, show where the next frontlit point should fall:
-        on a circle around the previous one, at the distance measured on the backlit image."""
+        """Show where the next frontlit point should fall while aligning without scale.
+
+        The guide is a circle around the previous frontlit point, with radius equal to the distance
+        between the last two backlit points."""
         for pane in self.panes:
             pane.canvas.delete("guide")
         state = self._tool_state

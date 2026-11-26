@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import Config
 
-# The licence file the command line uses when none was accepted before.
+# Environment variable naming a licence file for the command line.
 LICENSE_ENV = "MSSL_FOCUS_LICENSE"
 
 
@@ -19,7 +19,7 @@ def _fail(message):
 
 
 def _license_problem(backend, license_path):
-    """Return ``None`` if the licence file is valid, else a message saying why not."""
+    """Message saying why a licence file is not valid, or `None` if it is."""
     try:
         data = json.loads(Path(license_path).read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
@@ -56,7 +56,7 @@ def _license_problem(backend, license_path):
 
 
 def _known_license_files(config):
-    """Licence files to try before asking: the last one used, then any beside the program."""
+    """Licence files to try before asking, the last one used first, then any beside the program."""
     candidates = []
     remembered = config.get("license_path")
     if remembered:
@@ -70,10 +70,11 @@ def _known_license_files(config):
 
 
 def check_license(backend, config=None):
-    """Run the public licence UI using the injected private validation backend.
+    """Run the public licence dialogs with the private validation `backend`.
 
-    A licence file that was accepted before (or one sitting beside the program)
-    is re-validated silently, so a licensed user is not asked on every start.
+    A licence file accepted before, or one beside the program, is validated again silently, so
+    a licensed user is not asked on every start. Exits if the user cancels or gives an invalid
+    licence file or password.
     """
     from .license_ui import ask_license_file, ask_license_method, ask_password
     config = config if config is not None else Config()
@@ -111,13 +112,12 @@ def check_license(backend, config=None):
 
 
 def license_problem_quietly(backend, config=None, environ=None, password=None):
-    """The licence check for the command line, which has no dialogs: ``None`` if
-    licensed, else a message saying how to become so.
+    """Licence check for the command line, without dialogs.
 
-    A licence file accepted before (in the window), one beside the program, or
-    one named by the ``MSSL_FOCUS_LICENSE`` environment variable is accepted;
-    failing those, ``password`` (a callable, used at an interactive terminal)
-    is asked for the master password.
+    Returns `None` if licensed, else a message saying how to become licensed. A licence file
+    named by the `MSSL_FOCUS_LICENSE` environment variable, one accepted before in the window,
+    or one beside the program is accepted. Failing those, `password`, a callable used at an
+    interactive terminal, is asked for the master password.
     """
     config = config if config is not None else Config()
     environ = os.environ if environ is None else environ

@@ -1,4 +1,4 @@
-﻿"""Shared test helpers: synthetic filter images and a driver for the Tk app."""
+"""Shared test helpers for synthetic filter images and driving the Tk app."""
 
 import json
 import math
@@ -10,11 +10,10 @@ from PIL import Image, ImageDraw
 
 def make_filter_image(size=(1200, 800), dots=(), rotation=0.0, shift=(0, 0), scale=1.0,
                       background=12, mesh=True, dot_value=255):
-    """A dark frame with a faint mesh and bright dots, optionally transformed.
+    """Dark frame with a faint mesh and bright dots, optionally transformed.
 
-    ``dots`` are (x, y) positions in the untransformed frame; the returned
-    image shows them rotated by ``rotation`` degrees (clockwise) and scaled
-    about the centre, then shifted.
+    `dots` are `(x, y)` positions in the untransformed frame. The returned image shows them scaled
+    by `scale` and rotated by `rotation` degrees clockwise about the centre, then moved by `shift`.
     """
     width, height = size
     img = Image.new("RGB", size, (background,) * 3)
@@ -45,15 +44,14 @@ PLATE = (860.0, 800.0)                            # the frame plate around the o
 
 def make_framed_filter(lit="back", pinholes=(), tilt=0.0, shift=(0.0, 0.0), turned=False,
                        size=FRAMED_SIZE, membrane=None, inner_box=None, seed=0):
-    """A filter in its frame as the camera sees it, lit from behind or in front.
+    """Filter in its frame as the camera sees it, lit from behind or in front.
 
-    The frame plate (with a screw in each corner) holds a rounded-rectangle
-    opening; behind it, a mount brighter than the plate.  ``pinholes`` are
-    ``(x, y)`` in the upright, unshifted picture; they show as bright dots when
-    backlit only.  The whole picture is then turned by ``tilt`` degrees
-    (clockwise) about its centre, half a turn more if ``turned``, and moved by
-    ``shift``; see ``framed_position``.  ``inner_box`` draws a rectangle inside the
-    opening (a reflection with straight edges).
+    The frame plate, with a screw in each corner, holds a rounded-rectangle opening, and behind
+    it is a mount brighter than the plate. `pinholes` are `(x, y)` in the upright, unshifted
+    picture and show as bright dots only when backlit. The whole picture is then turned by `tilt`
+    degrees clockwise about its centre, half a turn more if `turned`, and moved by `shift` (see
+    `framed_position`). `inner_box` draws a rectangle inside the opening, like a reflection with
+    straight edges.
     """
     width, height = size
     cx, cy, ow, oh, radius = OPENING
@@ -93,7 +91,7 @@ def make_framed_filter(lit="back", pinholes=(), tilt=0.0, shift=(0.0, 0.0), turn
 
 
 def framed_position(point, tilt=0.0, shift=(0.0, 0.0), turned=False, size=FRAMED_SIZE):
-    """Where ``make_framed_filter`` draws an upright point given the same placement."""
+    """Where `make_framed_filter` draws an upright point given the same placement."""
     angle = math.radians(tilt + (180.0 if turned else 0.0))
     cx, cy = size[0] / 2, size[1] / 2
     dx, dy = point[0] - cx, point[1] - cy
@@ -141,7 +139,7 @@ def wait_idle(app, timeout=60):
 
 
 class Click:
-    """A stand-in for a Tk mouse event."""
+    """Stand-in for a Tk mouse event."""
 
     def __init__(self, widget, x, y):
         self.widget = widget

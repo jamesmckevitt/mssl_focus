@@ -1,7 +1,7 @@
-"""Session data: reading, writing and locating the files a session refers to.
+"""Reading and writing session files, and locating the files a session refers to.
 
-Pure helpers with no user-interface dependencies, so they can be used headlessly
-(see ``cli.py``) as well as by the Tk application (see ``session.py``).
+The helpers have no user-interface dependency, so the command line (`cli.py`) can
+use them as well as the window (`session.py`).
 """
 
 import json
@@ -13,8 +13,8 @@ from .camera import camera_differences, describe_camera, exposure_stops
 from .imaging import is_raw
 from .pair import BACKLIT, FRONTLIT, ImagePair, normalise_annotation
 
-SESSION_VERSION = 3      # 3: a session holds one inspection (one row); earlier ones could hold two
-RAW_CROP_VERSION = 2     # before this, markers were placed on the uncropped RAW frame
+SESSION_VERSION = 3      # one inspection (one row) per session; versions 1 and 2 could hold two
+RAW_CROP_VERSION = 2     # first version with markers on the cropped, not the uncropped, RAW frame
 CURRENT, REFERENCE = 0, 1
 SETTINGS_FILE_TYPE = "mssl_focus_image_settings"
 
@@ -40,7 +40,7 @@ def write_session(path, data):
 
 
 def describe_location(path):
-    """Short human label from a file's folders, e.g. ``5_thermal_test / em2``."""
+    """Short label from a file's two parent folders, such as `5_thermal_test / em2`."""
     if not path:
         return ""
     parent = Path(path).resolve().parent
@@ -67,7 +67,8 @@ def resolve_image_path(saved, relative, session_dir):
     if saved:
         candidates.append(Path(saved))
         parts = Path(str(saved).replace("\\", "/")).parts
-        # Same file name beside the session, then progressively more of the old folder tail.
+        # Try the file name beside the session, then with more and more of its old folders,
+        # each one level further up.
         for depth in range(1, min(4, len(parts)) + 1):
             base = session_dir
             for _ in range(depth - 1):
@@ -90,7 +91,7 @@ def _pair_of(values):
 
 
 def session_image_paths(session, session_path, reference=False):
-    """Return ``(resolved, saved)`` image path pairs for a session's main or reference row."""
+    """Return `(resolved, saved)` image path pairs for a session's main or reference row."""
     key = "compare_image_paths" if reference else "image_paths"
     saved = _pair_of(session.get(key))
     relative = _pair_of(session.get(key + "_rel"))
@@ -102,12 +103,12 @@ def session_image_paths(session, session_path, reference=False):
 
 
 def session_has_reference(session):
-    """Whether a session from an earlier version also holds a second (reference) row."""
+    """Whether a session holds a second (reference) row, as versions 1 and 2 could."""
     return bool(session.get("compare_row_enabled")) or any(_pair_of(session.get("compare_image_paths")))
 
 
 def describe_saved_reference(session):
-    """What the second row of an earlier, two-row session was, for telling the user."""
+    """Description of the second row of a two-row session, for the user."""
     label = session.get("compare_label") or ""
     names = [Path(str(p).replace("\\", "/")).name for p in _pair_of(session.get("compare_image_paths")) if p]
     files = ", ".join(names)
@@ -115,14 +116,15 @@ def describe_saved_reference(session):
 
 
 def alignment_key(other_session_path, session_dir):
-    """How a session refers to another session it has been lined up with."""
+    """Key a session uses for another session it is lined up with, its relative path if possible."""
     return relative_to(other_session_path, session_dir) or str(other_session_path)
 
 
 def row_alignments_from_session(session):
-    """How this session's row lines up with other sessions shown as its reference row:
-    ``{key of the other session: record}``.  A two-row session from an earlier version
-    stored one such alignment with its reference row; that one is kept too."""
+    """How a session's row lines up with other sessions shown as its reference row.
+
+    Returns `{key of the other session: record}`. A two-row session from version 1 or 2
+    stored one such alignment with its reference row, and that one is included."""
     found = {}
     stored = session.get("row_alignments")
     if isinstance(stored, dict):
@@ -142,8 +144,9 @@ def row_alignments_from_session(session):
 
 
 def row_matrix_from_record(record, current, reference):
-    """The matrix taking ``reference``'s pair space to ``current``'s, from a saved
-    alignment record, allowing for either row having been levelled differently since."""
+    """Matrix from `reference`'s pair space to `current`'s, from a saved alignment record.
+
+    It allows for either row having been levelled differently since the record was saved."""
     centre_c, centre_r = current.centre(BACKLIT), reference.centre(BACKLIT)
     saved = geo.translation(_float(record.get("off_x"), 0.0), _float(record.get("off_y"), 0.0)) @ geo.about(
         centre_r, max(0.01, _float(record.get("scale"), 1.0)), _float(record.get("rot"), 0.0))
@@ -153,7 +156,7 @@ def row_matrix_from_record(record, current, reference):
 
 
 def fill_pair_from_session(pair, session, reference=False):
-    """Copy a session's alignment, tone, noise and annotation records into ``pair``."""
+    """Copy a session's alignment, tone, noise and annotation records into `pair`."""
     prefix = "compare_" if reference else ""
     pair.apply_alignment_record(session.get(prefix + "alignment"))
     pair.apply_adjust_records(session.get(prefix + "adjustments"))
@@ -173,8 +176,10 @@ def fill_pair_from_session(pair, session, reference=False):
 
 
 def shift_legacy_raw_markers(pair, session, base_image):
-    """Sessions from v1.x placed markers on the uncropped RAW frame; RAW files are now
-    cropped to the camera's image area, so move those markers by the crop margin."""
+    """Move the markers of a v1.x session from the uncropped RAW frame to the cropped one.
+
+    RAW files are cropped to the camera's image area, so the markers move by the crop margin.
+    Sessions of `RAW_CROP_VERSION` or later, and backlit images that are not RAW, are left alone."""
     if int(_float(session.get("version"), 1)) >= RAW_CROP_VERSION or not is_raw(pair.paths[BACKLIT]):
         return
     left, top = getattr(base_image, "info", {}).get("raw_crop_margins", (0, 0))
@@ -184,7 +189,7 @@ def shift_legacy_raw_markers(pair, session, base_image):
 
 
 def develop_record(develop, session_dir):
-    """A development recipe as stored in a session: frame paths both absolute and relative."""
+    """Development recipe as stored in a session, with frame paths both absolute and relative."""
     record = dict(develop)
     for key in ("frames", "dark"):
         record[key] = list(develop.get(key) or [])
@@ -193,7 +198,7 @@ def develop_record(develop, session_dir):
 
 
 def resolve_frame_paths(pair, records, session_dir):
-    """Locate the extra frames and dark frames named in a session.  Returns how many are missing."""
+    """Locate the extra frames and dark frames named in a session. Returns how many are missing."""
     missing = 0
     for i in range(2):
         record = records[i] if isinstance(records, list) and i < len(records) and isinstance(records[i], dict) else {}

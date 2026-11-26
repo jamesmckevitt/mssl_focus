@@ -1,4 +1,4 @@
-"""The command line: map export, and a filter's inspection history.
+"""The command line for map export and a filter's inspection history.
 
     python mssl_focus.py export SESSION.json -o map.png
     python mssl_focus.py export em2 --inspection thermal -o map.png
@@ -13,12 +13,10 @@
     python mssl_focus.py crosscheck em2
     python mssl_focus.py show em2
 
-Started through ``mssl_focus.py`` or the packaged program, the commands need a
-licence as the window does (see ``launch.py``).
-
-A history is named by its file, or by the filter's name for ``<name>.json`` in
-the current folder.  Nothing here needs a display: the picture is drawn by
-``render.py``, the same code the window uses, so a map made here matches one
+A history is named by its file, or by the filter's name for `<name>.json` in the
+current folder. Run through `mssl_focus.py` or the packaged program, the commands
+need a licence, as the window does (see `launch.py`). They need no display. Maps
+are drawn by `render.py`, the same code the window uses, so they match maps
 exported from the application.
 """
 
@@ -54,8 +52,9 @@ _DEVELOPED_KEEP = 2
 
 
 def _open_developed(path, develop, dark_field):
-    """``open_image``, remembering the last couple of results: a command often
-    develops the same RAW photograph twice, to judge its noise and then to use it."""
+    """`open_image` with a cache of the last two results.
+
+    A command often develops the same RAW photograph twice, to judge its noise and then to use it."""
     try:
         stamp = os.path.getmtime(path)
     except OSError:
@@ -83,9 +82,10 @@ def _load_one(path, nr, develop, dark_field):
 
 
 def pair_from_session(session, session_path, label=None, quiet=False, load=(BACKLIT, FRONTLIT)):
-    """Build an ImagePair from a session record, with its images loaded.
-    ``session_path`` is the file that image paths are relative to; ``load`` says
-    which of its images to load."""
+    """Build an `ImagePair` from a session record, with its images loaded.
+
+    `session_path` is the file the image paths are relative to. `load` lists the images to load, by
+    index."""
     session_path = str(Path(session_path).resolve())
     session_dir = Path(session_path).parent
     pair = ImagePair()
@@ -115,14 +115,15 @@ def pair_from_session(session, session_path, label=None, quiet=False, load=(BACK
 
 
 def load_pair(session_path, quiet=False):
-    """Build an ImagePair from a session file, with its images loaded."""
+    """Build an `ImagePair` from a session file, with its images loaded."""
     session = read_session(session_path)
     return pair_from_session(session, session_path, quiet=quiet), session
 
 
 def _inspection_images(history, index, history_file, quiet=False, frontlit=True):
-    """The backlit and frontlit images of an inspection, as the window shows them
-    (the frontlit one None if not wanted)."""
+    """Backlit and frontlit images of an inspection, as the window shows them.
+
+    The frontlit image is `None` if `frontlit` is false."""
     insp = history["inspections"][index]
     view = hist.session_view(history, index, history_file)
     pair = pair_from_session(view, history_file, label=insp["id"], quiet=quiet,
@@ -133,16 +134,15 @@ def _inspection_images(history, index, history_file, quiet=False, frontlit=True)
     return images
 
 
-NOISY_SPOTS = 300    # in the middle of a backlit image: clean ones offer up to about 150 spots, noisy thousands
+NOISY_SPOTS = 300    # spots mid-image; a clean backlit image gives up to about 150, a noisy one thousands
 
 
 def _settle_development(history, index, history_file, quiet=False):
-    """Develop a RAW backlit photograph darker if the standard stretch turns its
-    sensor noise into spots.  A frame with little bright in it gets a strong
-    stretch, and on some (EM4's shock test) that floods the search with
-    thousands of candidates; a stop or two darker leaves the pinholes and loses
-    the noise.  The setting is kept with the inspection, so the window shows the
-    same image."""
+    """Develop a RAW backlit photograph darker if the standard stretch turns its sensor noise into spots.
+
+    A frame with little bright in it gets a strong stretch. On some (EM4's shock test) that floods the
+    search with thousands of candidates, and a stop or two darker keeps the pinholes and loses the noise.
+    The setting is kept with the inspection, so the window shows the same image."""
     from .imaging import default_develop, is_raw
     from .session_data import develop_record
     insp = history["inspections"][index]
@@ -169,7 +169,7 @@ def _settle_development(history, index, history_file, quiet=False):
 # --------------------------------------------------------------------------- #
 
 def content_rectangle(scene, pair, fit="outline", margin=0.04):
-    """The world rectangle to export: the filter outline, the markers, or the whole image."""
+    """World rectangle to export, framing the filter outline, the markers or the whole image."""
     from . import geometry as geo
     to_world = scene.world_matrix(render.CURRENT, BACKLIT)
     points = []
@@ -198,13 +198,13 @@ def build_export_parser():
     p.add_argument("source", help="session .json file, or filter history (file or filter name)")
     p.add_argument("-o", "--out", help="output image (default: beside the source, as .png)")
     p.add_argument("-i", "--inspection",
-                   help="history only: the inspection to map, by ID, stage or number (default: the latest). "
+                   help="inspection to map, by ID, stage or number, for a history (default: the latest). "
                         "The map shows every pinhole known up to it.")
     p.add_argument("--show-rejected", action="store_true",
-                   help="history only: also draw rejected pinholes, in grey")
+                   help="also draw rejected pinholes, in grey, for a history")
     p.add_argument("--fit", choices=["outline", "annotations", "image"], default="outline",
-                   help="what to frame: the filter outline (falling back to the markers, then the "
-                        "whole image), the markers, or the whole image. Default: outline")
+                   help="area to frame, which is the filter outline (falling back to the markers, then "
+                        "the whole image), the markers, or the whole image. Default: outline")
     p.add_argument("--margin", type=float, default=0.04,
                    help="blank margin around the framed content, as a fraction. Default: 0.04")
     p.add_argument("--zoom", type=float,
@@ -226,7 +226,7 @@ def build_export_parser():
     return p
 
 
-# Kept for callers of the earlier, export-only command line.
+# Alias for code that imports `build_parser`.
 build_parser = build_export_parser
 
 HISTORY_EXPORT_ZOOM = 0.3
@@ -269,8 +269,8 @@ def export_main(argv=None):
         px_per_point=args.dpi / 72.0,
     )
     x0, y0, x1, y1 = content_rectangle(scene, pair, fit=args.fit, margin=args.margin)
-    # content_rectangle works in world units; the renderer takes canvas units, and with
-    # no pan those differ only by the zoom.
+    # `content_rectangle` gives world units and the renderer takes canvas units. With no pan
+    # they differ only by the zoom.
     image = render.render_rect(scene, x0 * zoom, y0 * zoom, x1 * zoom, y1 * zoom)
 
     if args.max_width and image.width > args.max_width:
@@ -352,7 +352,7 @@ def _print_detection(insp, summary, added):
 
 
 def _photo_paths(source, frontlit=None, quiet=False):
-    """The backlit and frontlit photographs: as given, or chosen from a folder."""
+    """Backlit and frontlit photographs, as given or chosen from a folder."""
     if not Path(source).is_dir():
         return source, frontlit
     if frontlit:
@@ -459,8 +459,9 @@ def cmd_crosscheck(args):
 
 
 def _mark(args, change, word):
-    """Change pinholes by ID with ``change(history, ids)`` (``set_status`` or
-    ``set_unsure``), and say what changed as ``word``."""
+    """Change pinholes by ID with `change(history, ids)` and print what changed as `word`.
+
+    `change` calls `set_status` or `set_unsure`. Returns 1 if an ID is unknown, else 0."""
     path, history = _open(args.history)
     changed, unchanged, unknown = change(history, args.ids)
     if changed:
@@ -557,7 +558,7 @@ def _history_parser():
 
     q = sub.add_parser("add", help="add an inspection from a backlit and a frontlit photograph")
     q.add_argument("history", help="history file or filter name (created if new)")
-    q.add_argument("stage", help="stage: " + ", ".join(hist.STAGES))
+    q.add_argument("stage", help="stage, one of " + ", ".join(hist.STAGES))
     q.add_argument("backlit", help="backlit photograph, or a folder of RAW photographs to choose from "
                                    "(see the photos command)")
     q.add_argument("frontlit", nargs="?", help="frontlit photograph")
@@ -567,8 +568,8 @@ def _history_parser():
     q.add_argument("--filter", help="filter name, for a new history (default: the file name)")
     q.add_argument("--no-align", action="store_true", help="do not align it yet")
     q.add_argument("--detect", action="store_true", help="also search it for pinholes")
-    q.add_argument("--sensitivity", type=float, help="with --detect: 0-100, every spot above that floor (default: clear spots, and likely "
-                        "ones that are sharp points)")
+    q.add_argument("--sensitivity", type=float, help="with --detect, take every spot above this floor, 0-100 "
+                        "(default: clear spots, and likely ones that are sharp points)")
     aligning(q)
     common(q)
 
@@ -599,16 +600,16 @@ def _history_parser():
     q.add_argument("history")
     q.add_argument("inspection", nargs="?", help="ID, stage or number (default: the latest)")
     q.add_argument("--sensitivity", type=float,
-                   help="0-100: every spot above that floor; 50 clear spots, 75 clear and likely, 100 "
-                        "everything.  Default: clear spots, and likely ones that are sharp, bright points "
-                        "on dark membrane, as soft ones are mostly sensor noise")
+                   help="take every spot above this floor, 0-100, where 50 gives clear spots, 75 clear and "
+                        "likely ones, and 100 everything. Default: clear spots, and likely ones that are "
+                        "sharp, bright points on dark membrane, as soft ones are mostly sensor noise")
     q.add_argument("--category", help="category for the new pinholes (default: the inspection's)")
     q.add_argument("--redo", action="store_true",
                    help="first drop the pinholes an earlier detect added to this inspection "
                         "(rejected ones stay remembered)")
     common(q)
 
-    q = sub.add_parser("crosscheck", help="find faint pinholes by their showing in more than one inspection")
+    q = sub.add_parser("crosscheck", help="find faint pinholes seen in two or more inspections")
     q.add_argument("history")
     q.add_argument("-n", "--dry-run", action="store_true", help="list them without writing")
     common(q)
@@ -629,7 +630,7 @@ def _history_parser():
     q.add_argument("--stages", help="comma-separated stage of each session (default: from its folder names)")
     q.add_argument("--filter", help="filter name (default: the output file name)")
     q.add_argument("--no-images", action="store_true",
-                   help="do not open the photographs: no outline is looked for where a session has none, "
+                   help="do not open the photographs. No outline is looked for where a session has none, "
                         "and later inspections are placed by their markers alone, not checked against "
                         "the spots in their images")
     q.add_argument("--force", action="store_true", help="replace an existing history file")
@@ -652,8 +653,9 @@ def usage():
 
 
 def _expected_errors():
-    """Errors that mean bad input (a missing or unreadable file, a wrong name),
-    reported as a message rather than a traceback."""
+    """Exceptions that mean bad input, such as a missing or unreadable file or a wrong name.
+
+    They are reported as a message rather than a traceback."""
     from .autoalign import AlignmentError
     errors = (hist.HistoryError, AlignmentError, OSError, ValueError)
     try:

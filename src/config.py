@@ -1,4 +1,4 @@
-"""Small per-user settings file: last folder, recent sessions, window layout."""
+"""Small per-user settings file holding the last folder, recent sessions and window layout."""
 
 import json
 import os

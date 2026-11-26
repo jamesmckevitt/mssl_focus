@@ -8,8 +8,9 @@ from tests.helpers import dot_centroid, make_filter_image
 
 
 def test_render_puts_a_feature_where_the_matrix_says():
-    """Drawing and click handling share one matrix, so a dot must land exactly
-    where that matrix maps it -- including rotation, scale and offset."""
+    """A rendered dot lands exactly where the matrix maps it, with rotation, scale and offset.
+
+    Drawing and click handling share this matrix, so the two must agree."""
     dot = (700.0, 260.0)
     pyramid = Pyramid(make_filter_image((1200, 800), dots=[dot], mesh=False))
     centre = (dot[0] + 0.5, dot[1] + 0.5)   # pixel (700, 260) spans 700..701, 260..261
@@ -103,8 +104,9 @@ def test_match_tone_declines_when_an_image_has_nothing_bright():
 
 
 def test_match_tone_keeps_blown_highlights_white():
-    """Two photographs with large clipped-white areas: the shadows are matched and
-    white stays white, instead of being dragged down to grey."""
+    """Clipped white stays white while the shadows are matched.
+
+    Both photographs have large clipped-white areas, which must not be dragged down to grey."""
     rng = np.random.default_rng(4)
     target = np.concatenate([np.clip(rng.normal(90, 15, 6000), 40, 160), np.full(4000, 255.0)])
     source = np.concatenate([np.clip(rng.normal(120, 12, 6000), 80, 180), np.full(4000, 255.0)])
@@ -117,7 +119,7 @@ def test_match_tone_keeps_blown_highlights_white():
 
 
 def _noisy_frames(folder, count, seed=0):
-    """Several exposures of the same scene: one bright spot on a dark, noisy background."""
+    """Save `count` exposures of one bright spot on a dark, noisy background and return their paths."""
     rng = np.random.default_rng(seed)
     scene = np.full((120, 160, 3), 20.0)
     scene[60:64, 80:84] = 200.0
@@ -146,7 +148,7 @@ def test_a_dark_frame_removes_hot_pixels_and_stray_light_but_not_the_signal(tmp_
     fixed[30, 40] = 180.0               # a hot pixel
     fixed[90:110, 10:60] = 60.0         # stray light on the holder
     scene = np.full((120, 160, 3), 12.0)
-    scene[60:64, 80:84] = 200.0         # the pinhole: only there when the light is on
+    scene[60:64, 80:84] = 200.0         # the pinhole, only there when the light is on
     light = np.clip(scene + fixed + rng.normal(0, 3, scene.shape), 0, 255).astype(np.uint8)
     dark = np.clip(12.0 + fixed + rng.normal(0, 3, scene.shape), 0, 255).astype(np.uint8)
     Image.fromarray(light).save(tmp_path / "light.png")

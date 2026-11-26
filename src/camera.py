@@ -1,4 +1,4 @@
-"""Camera exposure settings recorded in an image file: reading, describing, comparing."""
+"""Reading, describing and comparing the camera exposure settings recorded in image files."""
 
 import io
 import math
@@ -52,10 +52,11 @@ def _from_exif(exif):
 
 
 def read_camera_info(path):
-    """The exposure settings stored in an image file, or ``{}`` if there are none.
+    """Exposure settings stored in an image file, or `{}` if there are none.
 
-    Keys, each present only when known: ``exposure_time`` (seconds),
-    ``f_number``, ``iso``, ``focal_length`` (mm), ``lens``, ``model``, ``taken``.
+    The keys are `exposure_time` (seconds), `f_number`, `iso`, `focal_length` (mm),
+    `lens`, `model` and `taken`, each present only when known. A RAW file's settings
+    are read from its embedded JPEG preview.
     """
     try:
         if os.path.splitext(path)[1].lower() in RAW_EXTENSIONS:
@@ -68,7 +69,7 @@ def read_camera_info(path):
                 return _from_exif(preview.getexif())
         with Image.open(path) as handle:
             return _from_exif(handle.getexif())
-    except Exception:  # metadata is a nicety: never let it stop an image loading
+    except Exception:  # metadata is optional, so a failure here never stops an image loading
         return {}
 
 
@@ -82,7 +83,7 @@ def format_exposure_time(seconds):
 
 
 def camera_parts(info, with_equipment=True):
-    """The settings as ``(key, text)`` pairs, in display order."""
+    """Settings as `(key, text)` pairs, in display order."""
     info = info or {}
     parts = []
     if "f_number" in info:
@@ -104,7 +105,7 @@ def camera_parts(info, with_equipment=True):
 
 
 def describe_camera(info, with_equipment=True):
-    """One line such as ``f/8  |  10 s  |  ISO 2000  |  30 mm  |  ILCE-6400``."""
+    """Settings as one line, such as `f/8  |  10 s  |  ISO 2000  |  30 mm  |  ILCE-6400`."""
     return "  |  ".join(text for _key, text in camera_parts(info, with_equipment))
 
 
@@ -124,8 +125,9 @@ def mismatched_settings(a, b):
 
 
 def exposure_stops(saved, target):
-    """How many stops more light ``target`` recorded than ``saved`` (negative: less),
-    or ``None`` if either lacks the aperture, time or ISO."""
+    """Stops more light `target` recorded than `saved`, negative if less.
+
+    Returns `None` if either lacks the aperture, exposure time or ISO."""
     def light(info):
         if not all(key in info for key in ("exposure_time", "f_number", "iso")):
             return None

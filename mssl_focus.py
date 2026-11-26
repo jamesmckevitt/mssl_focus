@@ -1,4 +1,4 @@
-"""MSSL FOCUS: the window, or the command line.
+"""Start MSSL FOCUS in a window or on the command line.
 
     python mssl_focus.py                        open the application
     python mssl_focus.py export SESSION.json    render a map without a window

@@ -29,7 +29,9 @@ def _centre_window(window):
 
 
 def ask_license_method():
-    """Ask whether to use a licence file or the master password."""
+    """Ask whether to use a licence file or the master password.
+
+    Returns `yes`, `no`, or None if the window is closed."""
     window = _new_window("MSSL FOCUS - License Required", (520, 270))
     result = {"value": None}
 
@@ -95,7 +97,7 @@ def ask_license_method():
 
 
 def ask_license_file():
-    """Open the file picker with a visible, icon-bearing owner window."""
+    """Ask for a licence file with the file picker, owned by a visible window with the app icon."""
     window = _new_window("MSSL FOCUS - Select License", (500, 170))
     tk.Label(
         window,
@@ -125,7 +127,9 @@ def ask_license_file():
 
 
 def ask_password(text):
-    """Prompt for the master password in a correctly sized application window."""
+    """Ask for the master password, with `text` as the prompt.
+
+    Returns the password entered, or None if cancelled."""
     window = _new_window("MSSL FOCUS - License", (500, 210))
     result = {"value": None}
     password = tk.StringVar(window)
@@ -189,7 +193,7 @@ def ask_password(text):
 
 
 def show_license_error(message):
-    """Display a modal-looking error with the application icon and taskbar entry."""
+    """Show a licence error in a window with the application icon and a taskbar entry."""
     window = _new_window("MSSL FOCUS - License Error", (520, 210))
 
     tk.Label(

@@ -1,8 +1,8 @@
-"""Session files: the session commands in the window.
+"""Session commands of the window.
 
-Reading, writing and locating the files a session refers to live in
-``session_data.py``, which has no user-interface dependency so the command line
-can use it too; they are re-exported here so existing imports keep working.
+Reading, writing and locating session files is done in `session_data.py`, which
+the command line uses too. Its names are re-exported here for code that imports
+them from this module.
 """
 
 import os
@@ -45,9 +45,10 @@ def _is_history_file(path):
 
 class SessionMixin:
     def _session_record(self, session_path):
-        """What a session file holds: the current row only.  A reference row is another
-        inspection with a session of its own; all that is kept of it here is how the
-        two line up, so that loading it again as the reference restores the alignment."""
+        """Session record for the current row.
+
+        A reference row is another inspection with a session of its own. Only how the two
+        rows line up is kept here, so loading it again as the reference restores the alignment."""
         session_dir = Path(session_path).resolve().parent
         current = self.pairs[CURRENT]
         record = {
@@ -78,8 +79,7 @@ class SessionMixin:
         return record
 
     def _row_alignments_to_save(self, session_dir):
-        """The current row's known alignments to other sessions, with the one to the
-        reference row now shown brought up to date."""
+        """Alignments of the current row to other sessions, updated for the reference row shown."""
         current, reference = self.pairs
         alignments = {key: dict(value) for key, value in current.row_alignments.items()}
         if reference.session_path and reference.has_image(BACKLIT) and current.has_image(BACKLIT):
@@ -99,6 +99,7 @@ class SessionMixin:
 
     def _restore_row_alignment(self):
         """Line the rows up as they were when these two sessions were last saved together.
+
         Returns whether a saved alignment was found."""
         current, reference = self.pairs
         if not (current.session_path and reference.session_path
@@ -109,7 +110,7 @@ class SessionMixin:
         if record is not None:
             self.set_row_matrix(row_matrix_from_record(record, current, reference))
             return True
-        # Saved the other way round, with today's reference row as the current one.
+        # Saved the other way round, with the present reference row as the current one.
         record = reference.row_alignments.get(
             alignment_key(current.session_path, Path(reference.session_path).resolve().parent))
         if record is not None:
@@ -164,7 +165,7 @@ class SessionMixin:
         self.pairs[0].row_alignments = record["row_alignments"]
         self.session_path = path
         self.pairs[0].session_path = path
-        self.pairs[0].history_inspection = None     # saved as a session of its own now
+        self.pairs[0].history_inspection = None     # saved as a session of its own
         self.pairs[0].label = describe_location(path)
         self.dirty = False
         self.config.add_recent(path)
@@ -180,7 +181,7 @@ class SessionMixin:
         current = self.pairs[CURRENT]
         base = Path(path).resolve().parent
         try:
-            history = hist.read_history(path)      # afresh: the command line may have changed it
+            history = hist.read_history(path)      # read again, as the command line may have changed it
             index = hist.inspection_index(history, current.history_inspection)
             summary = hist.apply_view(
                 history, index, current.annotations,
@@ -194,7 +195,7 @@ class SessionMixin:
             messagebox.showerror("Save to history", f"Could not save to the history:\n{path}\n\n{exc}",
                                  parent=self.root)
             return None
-        # Show the markers as the history now has them: new IDs, rejected ones gone.
+        # Show the markers as saved in the history, with new IDs and without rejected ones.
         view = hist.session_view(history, index, path)
         current.annotations = [normalise_annotation(a) for a in view["annotations"]]
         current.colour_labels = dict(view["colour_labels"])
@@ -214,7 +215,7 @@ class SessionMixin:
         return path
 
     def _choose_inspection(self, history, title):
-        """Ask which inspection of a history to open.  Returns its index, or None."""
+        """Ask which inspection of a history to open. Returns its index, or `None`."""
         inspections = history["inspections"]
         if not inspections:
             messagebox.showinfo(title, "That history has no inspections yet.", parent=self.root)
@@ -261,7 +262,7 @@ class SessionMixin:
         return outcome["index"]
 
     def _confirm_discard(self, action):
-        """Offer to save unsaved work before ``action``.  False means cancel the action."""
+        """Offer to save unsaved work before `action`. Returns False if the action is cancelled."""
         if not self.dirty:
             return True
         answer = messagebox.askyesnocancel(
@@ -301,9 +302,9 @@ class SessionMixin:
     def _locate_images(self, title, entries):
         """Resolve image paths, asking only about the ones that cannot be found.
 
-        ``entries`` is a list of ``(label, resolved_path, saved_path)``.  Returns
-        the final path list (``None`` for images to leave out), or ``None`` if
-        the user cancelled.
+        `entries` is a list of `(label, resolved_path, saved_path)`. Returns the
+        final path list (`None` for images to leave out), or `None` if the user
+        cancelled.
         """
         missing = [i for i, (_label, resolved, saved) in enumerate(entries) if saved and not resolved]
         final = [resolved for _label, resolved, _saved in entries]
@@ -370,8 +371,10 @@ class SessionMixin:
         return final
 
     def _confirm_two_row_session(self, title, session, path, row):
-        """An earlier version saved the reference row inside the session.  Say that only
-        the session's own row is loaded now.  False cancels the load."""
+        """Tell the user that only the session's own row of a two-row session is loaded.
+
+        Versions 1 and 2 saved the reference row inside the session. Returns False if the
+        user cancels the load."""
         lines = [
             f"{os.path.basename(path)} was saved by an earlier version with two rows in it.",
             "",
@@ -388,11 +391,11 @@ class SessionMixin:
         return messagebox.askokcancel(title, "\n".join(lines), icon="warning", parent=self.root)
 
     def open_session(self, path=None, row=CURRENT, inspection=None):
-        """Load a session -- one inspection's images, alignment and markers -- into the
-        current row, or into the reference row to compare against.  The other row stays.
+        """Load a session into the current row, or into the reference row to compare against.
 
-        ``path`` may also be a filter history; ``inspection`` then names the inspection
-        to open (by ID, stage or number), else the user is asked."""
+        A session holds one inspection's images, alignment and markers. The other row stays.
+        `path` may also be a filter history. `inspection` then names the inspection to open,
+        by ID, stage or number, and if it is `None` the user is asked."""
         title = "Load session into reference row" if row == REFERENCE else "Open session"
         if row == CURRENT and not self._confirm_discard("open another session"):
             return
@@ -427,7 +430,7 @@ class SessionMixin:
         if session_has_reference(session) and not self._confirm_two_row_session(title, session, path, row):
             return
 
-        # Always the session's own row -- never the reference row an earlier version saved with it.
+        # Always the session's own row, never a reference row saved with it by version 1 or 2.
         resolved, saved = session_image_paths(session, path)
         entries = [(self._image_label(i, row), resolved[i], saved[i]) for i in (BACKLIT, FRONTLIT)]
         final = self._locate_images(title, entries)
@@ -546,8 +549,9 @@ class SessionMixin:
         return path
 
     def _confirm_settings_camera(self, title, path, saved_for, saved_camera, row, idx):
-        """Tell the user which camera settings the saved look was made for, and whether the
-        image it is about to be applied to was taken differently.  False cancels the load."""
+        """Show the camera settings a saved look was made for, and whether the target image differs.
+
+        Returns False if the user cancels the load."""
         pair = self.pairs[row]
         kind = "backlit" if idx == BACKLIT else "frontlit"
         saved_camera = saved_camera if isinstance(saved_camera, dict) else {}
@@ -582,7 +586,7 @@ class SessionMixin:
                                       parent=self.root)
 
     def load_image_settings(self, path=None):
-        """Apply saved settings -- from a settings file or a session -- to the selected image."""
+        """Apply saved settings from a settings file or a session to the selected image."""
         title = "Load image settings"
         row, idx = self._adjust_target()
         pair = self.pairs[row]
@@ -602,7 +606,7 @@ class SessionMixin:
             saved_for = data.get("image")
             saved_camera = data.get("camera")
         elif "adjustments" in data:
-            # A session file: take the settings of its image of the same kind.
+            # From a session file, take the settings of its image of the same kind.
             def pick(key):
                 values = data.get(key)
                 return values[idx] if isinstance(values, list) and idx < len(values) else None

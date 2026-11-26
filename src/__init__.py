@@ -2,8 +2,8 @@ from .metadata import APP_AUTHOR, APP_EMAIL, APP_INSTITUTION, APP_VERSION
 
 
 def __getattr__(name):
-    # Imported on demand: the application modules need Tk, and ``main`` needs
-    # the private licence module, neither of which the pure helpers require.
+    # Imported on demand, since the application modules need Tk and `main` needs
+    # the private licence module, and the pure helpers need neither.
     if name == "ImageComparer":
         from .app import ImageComparer
         return ImageComparer

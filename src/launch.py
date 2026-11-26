@@ -1,6 +1,6 @@
-"""Starting MSSL FOCUS: the window, or a command-line verb.
+"""Entry point that starts the window or runs a command-line verb.
 
-Kept light: starting the window imports nothing here beyond ``sys``.
+Starting the window imports nothing here beyond `sys`, to keep start-up light.
 """
 
 import sys
@@ -26,7 +26,9 @@ def main(argv=None):
 
 
 def _require_license():
-    """The command line needs a licence as the window does, checked without dialogs."""
+    """Check the licence for the command line without dialogs, and exit if there is none.
+
+    At a real console it asks for the master password when no licence file is found."""
     try:
         from . import license as backend
     except ImportError:
@@ -49,9 +51,10 @@ def _require_license():
 
 
 def _interactive():
-    """Whether someone can type an answer.  On Windows ``isatty`` is also true
-    of the NUL device that scripts and scheduled tasks read from, where a prompt
-    would wait for ever, so the input must be a real console."""
+    """Whether someone can type an answer.
+
+    On Windows `isatty` is also true of the NUL device that scripts and scheduled tasks read
+    from, where a prompt would wait for ever, so the input must be a real console."""
     if sys.stdin is None:
         return False
     if sys.platform == "win32":
@@ -70,9 +73,11 @@ def _interactive():
 
 
 def _attach_console():
-    """The packaged program is a windowed one, so it starts with nowhere to print.
-    Run from a terminal, it borrows that terminal's console; otherwise what it
-    would print goes to ``cli.log`` in the settings folder."""
+    """Give the command line somewhere to print.
+
+    The packaged program is a windowed one, so it starts with nowhere to print. Run from a
+    terminal, it borrows that terminal's console. Otherwise its output goes to `cli.log` in the
+    settings folder."""
     if sys.stdout is not None and sys.stderr is not None:
         return
     stream = None

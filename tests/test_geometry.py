@@ -61,8 +61,9 @@ def _pair(size_back=(1200, 800), size_front=(1210, 790)):
 
 
 def test_frontlit_matrix_matches_the_session_file_convention():
-    """Offset, rotation and scale keep the meaning they have in saved sessions:
-    rotate and scale about the frontlit image centre, then shift."""
+    """Offset, rotation and scale keep their meaning in saved sessions.
+
+    The frontlit image is rotated and scaled about its centre, then shifted."""
     pair = _pair()
     pair.off_x, pair.off_y, pair.rot, pair.scale, pair.glob_rot = 118.0, 13.0, -0.38, 0.996, 0.96
     cx, cy = pair.centre(FRONTLIT)

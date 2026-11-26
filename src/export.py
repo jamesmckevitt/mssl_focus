@@ -8,7 +8,7 @@ the preview dialog.
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import ImageTk
+from PIL import Image, ImageTk
 
 from . import render
 from . import theme

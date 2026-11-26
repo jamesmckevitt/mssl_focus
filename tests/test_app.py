@@ -497,6 +497,21 @@ def test_export_contains_both_rows_and_the_legend(app, tmp_path):
     assert single.getpixel((int(marker_x), int(marker_y)))[0] > 200   # the dot itself, untouched
 
 
+def test_export_preview_shrinks_an_export_larger_than_the_screen(app, tmp_path, monkeypatch):
+    stage = make_stage(tmp_path / "1_incoming" / "em9", DOTS)
+    load_stage(app, stage)
+    # A 500 px screen leaves 400 px for the preview, so the export must be shrunk.
+    monkeypatch.setattr(app.root, "winfo_screenwidth", lambda: 500)
+    before = set(app.root.winfo_children())
+    canvas = pane(app, 0, BACKLIT).canvas
+    app.show_export_preview(0, 0, canvas.winfo_width(), canvas.winfo_height())
+    windows = [w for w in app.root.winfo_children() if w not in before and isinstance(w, tk.Toplevel)]
+    assert len(windows) == 1
+    previews = [w for w in windows[0].winfo_children() if isinstance(w, tk.Label) and w.cget("image")]
+    assert previews and int(previews[0].winfo_reqwidth()) <= 420
+    windows[0].destroy()
+
+
 def test_found_pinholes_are_reviewed_one_by_one(app, tmp_path):
     load_stage(app, make_stage(tmp_path / "s", DOTS))
     app.set_tool("annotate")

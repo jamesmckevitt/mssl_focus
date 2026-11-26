@@ -95,7 +95,6 @@ jobs:
           files: |
             ${{ matrix.artifact }}
             pyproject.toml
-          generate_release_notes: true
 
       # A run started by hand keeps the program as a workflow artifact, for testing.
       - name: Upload artifact (manual dispatch only)

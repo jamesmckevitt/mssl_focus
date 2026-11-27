@@ -15,6 +15,15 @@ __pycache__/
 *.arw
 *.ARW
 src/license.py
+src/detect.py
+src/autoalign.py
+src/history.py
+src/photos.py
+src/_private_deps.py
+src/*.pyd
+src/*.so
+src/*.c
+private/
 keygen.py
 .venv/
 .pytest_cache/

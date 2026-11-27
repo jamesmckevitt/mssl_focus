@@ -83,15 +83,17 @@ To request a license, contact [jm2@mssl.ucl.ac.uk](mailto:jm2@mssl.ucl.ac.uk).
 
 ### Running from source
 
-With `src/license.py` present, run the software from source with
+The detection, alignment, history and license modules are kept in a private repository, and releases have them compiled in. With a checkout of it named `mssl_focus_private` beside this repository, or named by the `MSSL_FOCUS_PRIVATE` environment variable, run the software from source with
 
 ```bash
 python -m src
 ```
 
-The tests need a display but not the license module.
+Copies of the private modules left in `src` itself, such as an old `src/license.py`, take precedence over the private checkout, so delete them.
+
+The tests need a display and the private modules. Run them together with the private repository's tests.
 
 ```bash
 pip install -e .[test]
-python -m pytest tests
+python -m pytest tests ../mssl_focus_private/tests_private
 ```

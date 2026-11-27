@@ -57,6 +57,22 @@ def test_without_a_licence_the_command_line_says_how_to_get_one(tmp_path, monkey
     assert license_problem_quietly(FakeBackend, FakeConfig(), environ={}, password=lambda: "open sesame") is None
 
 
+def test_a_backend_that_checks_signatures_itself_decides(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class SigningBackend(FakeBackend):
+        @staticmethod
+        def signature_ok(email, expiry, signature):
+            return signature == "good"
+
+    good = tmp_path / "good.dat"
+    good.write_text(json.dumps({"email": "a@b.org", "expiry": "2099-01-01", "signature": "good"}))
+    bad = tmp_path / "bad.dat"
+    bad.write_text(json.dumps({"email": "a@b.org", "expiry": "2099-01-01", "signature": "bad"}))
+    assert license_problem_quietly(SigningBackend, FakeConfig(), environ={LICENSE_ENV: str(good)}) is None
+    assert "invalid" in license_problem_quietly(SigningBackend, FakeConfig(), environ={LICENSE_ENV: str(bad)})
+
+
 def test_commands_check_the_licence_but_help_does_not(monkeypatch):
     calls = []
     monkeypatch.setattr(launch, "_require_license", lambda: calls.append("licence"))

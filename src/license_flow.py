@@ -35,8 +35,12 @@ def _license_problem(backend, license_path):
         return ("The selected license file is incomplete.\n\n"
                 "Please obtain a valid license.dat from jm2@mssl.ucl.ac.uk.")
 
-    expected = backend._compute_signature(email, expiry)
-    if not hmac.compare_digest(str(signature), expected):
+    checker = getattr(backend, "signature_ok", None)
+    if checker is not None:
+        valid = checker(email, expiry, str(signature))
+    else:
+        valid = hmac.compare_digest(str(signature), backend._compute_signature(email, expiry))
+    if not valid:
         return ("License signature is invalid.\n\n"
                 "The license file may have been tampered with.\n"
                 "Please obtain a new license from jm2@mssl.ucl.ac.uk.")

@@ -25,11 +25,13 @@ dependencies = [
   "Pillow>=12.0",
   "rawpy>=0.27",
   "opencv-python-headless>=4.11",
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]
 build = [
   "pyinstaller>=6.0",
+  "cython>=3.0",
 ]
 test = [
   "pytest>=8.0",

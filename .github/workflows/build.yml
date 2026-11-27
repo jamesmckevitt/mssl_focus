@@ -5,6 +5,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      private_ref:
+        description: Branch of mssl_focus_private to build with
+        default: master
 
 permissions:
   contents: write   # needed to create and update releases
@@ -44,13 +48,20 @@ jobs:
       - name: Prepare build files (icon, version info, _version.txt)
         run: python build_prepare.py "${{ github.ref_name }}"
 
-      - name: Inject license module
-        shell: bash
-        env:
-          LICENSE_MODULE: ${{ secrets.LICENSE_MODULE }}
-        run: |
-          mkdir -p src
-          echo "$LICENSE_MODULE" > src/license.py
+      # Only the top-level files and src/ of the private repository are fetched.
+      - name: Fetch the private modules
+        uses: actions/checkout@v5
+        with:
+          repository: jamesmckevitt/mssl_focus_private
+          ref: ${{ inputs.private_ref || 'master' }}
+          ssh-key: ${{ secrets.PRIVATE_REPO_KEY }}
+          path: private
+          sparse-checkout: src
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Compile the private modules
+        run: python build_private.py private
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
@@ -60,6 +71,7 @@ jobs:
           --name mssl_focus
           --hidden-import tkinter
           --hidden-import tkinter.ttk
+          --hidden-import src._private_deps
           --collect-all rawpy
           --collect-all cv2
           --add-data "_version.txt:."
@@ -77,6 +89,7 @@ jobs:
           --name mssl_focus
           --hidden-import tkinter
           --hidden-import tkinter.ttk
+          --hidden-import src._private_deps
           --collect-all rawpy
           --collect-all cv2
           --add-data "_version.txt:."
